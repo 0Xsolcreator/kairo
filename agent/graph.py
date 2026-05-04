@@ -1,6 +1,8 @@
+import sqlite3
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_core.messages import BaseMessage
 from typing import Annotated
 from typing_extensions import TypedDict
@@ -34,4 +36,6 @@ builder.set_entry_point("agent")
 builder.add_conditional_edges("agent", should_continue)
 builder.add_edge("tools", "agent")
 
-graph = builder.compile()
+_conn = sqlite3.connect("agent_memory.db", check_same_thread=False)
+checkpointer = SqliteSaver(_conn)
+graph = builder.compile(checkpointer=checkpointer)

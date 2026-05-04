@@ -3,3 +3,5 @@ node_modules/
 __pycache__/
 *.py[cod]
 .env
+agent_memory.db
+USAGE.md
