@@ -1,4 +1,13 @@
-from agent.tools.shell import shell
+from agent.tools.monitors import (
+    get_recent_signals,
+    list_active_monitors,
+    list_monitor_types,
+    stop_monitor,
+)
 
-# Register new tools here. The agent picks up everything in this list.
-tools = [shell]
+tools = [
+    list_monitor_types,
+    stop_monitor,
+    list_active_monitors,
+    get_recent_signals,
+]
