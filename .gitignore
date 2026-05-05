@@ -4,4 +4,6 @@ __pycache__/
 *.py[cod]
 .env
 agent_memory.db
+.claude/settings.local.json
 USAGE.md
+POLLING.md
