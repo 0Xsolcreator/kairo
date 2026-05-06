@@ -1,0 +1,9 @@
+"""
+Reusable Action building blocks shared across monitor-type executors.
+
+Add modules here as you build out the verbs:
+  wallet.py    — GetBalance, RequireMinBalance, Transfer, ...
+  jupiter.py   — DepositToJupiter, WithdrawFromJupiter, ...
+  kamino.py    — DepositToKamino, WithdrawFromKamino, ...
+  shell.py     — RunShellCommand (generic CLI escape hatch)
+"""
