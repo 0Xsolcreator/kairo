@@ -15,6 +15,7 @@ import agent.engines as engines
 import agent.store as store
 from agent.llm import llm
 from agent.schemas.monitor import DataSource, DepositEarnScope, Monitor, SUPPORTED_TOKENS
+from agent.services import monitors as monitor_services
 from agent.tools import tools
 from agent.tools.monitors import catalogue_text
 
@@ -104,67 +105,6 @@ _INTENT_DEPOSIT_EARN = _re.compile(
 )
 
 
-def _run_intent(intent: str, args: dict) -> str:
-    if intent == "list_monitors":
-        monitors = store.list_monitors()
-        if not monitors:
-            return "No monitors are currently running."
-        lines = [f"{len(monitors)} active monitor(s):\n"]
-        for mon in monitors:
-            sym = getattr(mon.scope, "token_symbol", "?")
-            lines.append(f"  ID      : {mon.id}")
-            lines.append(f"  Type    : {mon.type} — {sym}")
-            lines.append(f"  Interval: every {mon.poll_interval}s")
-            lines.append(f"  Status  : {mon.status.value}\n")
-        return "\n".join(lines)
-
-    if intent == "stop_monitor":
-        mid = args.get("monitor_id")
-        if not mid:
-            return "Please include the monitor ID. Example: 'stop monitor <id>'"
-        if store.get_monitor(mid) is None:
-            return f"No active monitor found with ID '{mid}'."
-        engines.polling.stop(mid)
-        store.unregister_monitor(mid)
-        return f"Monitor '{mid}' has been stopped."
-
-    if intent == "get_signals":
-        mid = args.get("monitor_id")
-        if not mid:
-            all_monitors = store.list_monitors()
-            if not all_monitors:
-                return "No monitors running. Start one first."
-            mid = all_monitors[-1].id
-        if store.get_monitor(mid) is None:
-            return f"No active monitor found with ID '{mid}'."
-        signals = store.get_signals(mid, 5)
-        if not signals:
-            return "No signals yet — the monitor is still on its first poll."
-        lines = [f"Last {len(signals)} signal(s) for {mid}:\n"]
-        for s in reversed(signals):
-            ts   = s.timestamp.strftime("%H:%M:%S")
-            meta = s.metadata
-            lines.append(f"[{ts}] {s.signal}")
-            lines.append(f"  {s.reason}")
-            jup_apy = meta.get("jupiter_apy_pct")
-            kam_apy = meta.get("kamino_apy_pct")
-            if jup_apy is not None:
-                lines.append(
-                    f"  Jupiter : {jup_apy:.2f}% APY | "
-                    f"TVL ${meta.get('jupiter_tvl_usd', 0):,.0f}"
-                )
-            if kam_apy is not None:
-                vol = " ⚠ volatile" if meta.get("kamino_yield_volatile") else ""
-                lines.append(
-                    f"  Kamino  : {kam_apy:.2f}% APY | "
-                    f"TVL ${meta.get('kamino_tvl_usd', 0):,.0f}{vol}"
-                )
-            lines.append("")
-        return "\n".join(lines)
-
-    return "Unknown intent."
-
-
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
@@ -206,17 +146,17 @@ def intent_router(state: State) -> dict:
     text = last.content
 
     if _INTENT_LIST.search(text):
-        reply = _run_intent("list_monitors", {})
+        reply = monitor_services.render_active_monitors()
         return {"messages": [AIMessage(content=reply)], "pending_action": None}
 
     if _INTENT_STOP.search(text):
         m = _UUID_RE.search(text)
-        reply = _run_intent("stop_monitor", {"monitor_id": m.group() if m else None})
+        reply = monitor_services.do_stop_monitor(m.group() if m else None)
         return {"messages": [AIMessage(content=reply)], "pending_action": None}
 
     if _INTENT_SIGNALS.search(text):
         m = _UUID_RE.search(text)
-        reply = _run_intent("get_signals", {"monitor_id": m.group() if m else None})
+        reply = monitor_services.render_recent_signals(m.group() if m else None)
         return {"messages": [AIMessage(content=reply)], "pending_action": None}
 
     if _INTENT_DEPOSIT_EARN.search(text):
