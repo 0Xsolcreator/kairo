@@ -247,9 +247,9 @@ async def deposit_earn_setup(state: State) -> dict:
             f"  Token      : {token['symbol']} ({token['mint'][:8]}…)\n"
             f"  Protocols  : Jupiter Lend + Kamino KVaults\n"
             f"  Interval   : every {monitor.poll_interval}s\n"
-            f"  Funding    : {monitor_wallet.umbra_meta.meta_address}\n"
+            f"  Funding    : {monitor_wallet.operating.address}\n"
             f"  Returns to : {holding_addr}\n\n"
-            f"Send funds to the funding address via Umbra to begin operations.\n"
+            f"Send funds to the funding address to begin operations.\n"
             f"Say 'get signals' to check the latest APY recommendation.\n"
             f"Say 'list active monitors' to see all running monitors."
         ))],

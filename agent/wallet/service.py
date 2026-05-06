@@ -149,9 +149,18 @@ class WalletService:
         return wallet.umbra_meta if wallet else None
 
     def get_funding_address(self, monitor_id: str) -> str | None:
-        """The Umbra meta-address senders should send funds to."""
-        meta = self.get_umbra_meta(monitor_id)
-        return meta.meta_address if meta else None
+        """
+        The address users should send funds to in order to fund this monitor.
+
+        Currently returns the operating keypair's regular 32-byte Solana
+        pubkey — i.e. funds should be sent directly, no Umbra in the loop.
+        When the Umbra integration lands, switch this to return
+        `umbra_meta.meta_address` so funding flows through stealth addresses.
+        The Umbra meta keys are still derived and persisted in the meantime,
+        so the switch is one-line.
+        """
+        wallet = self.get_monitor_wallet(monitor_id)
+        return wallet.operating.address if wallet else None
 
     # Lifecycle ----------------------------------------------------------
 
