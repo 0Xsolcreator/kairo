@@ -7,6 +7,15 @@ from agent.executor import ExecutorEngine
 from agent.executor.debounce import DebouncedExecutor
 from agent.executor.deposit_earn import DepositEarnExecutor
 from agent.polling import PollingEngine
+from agent.wallet import WalletService
+
+# ---------------------------------------------------------------------------
+# Wallet service singleton
+# ---------------------------------------------------------------------------
+# Chain actions, the graph, and monitor services all reach the wallet
+# subsystem through this singleton: `from agent.engines import wallet`.
+
+wallet = WalletService()
 
 # ---------------------------------------------------------------------------
 # Executor wiring

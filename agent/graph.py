@@ -165,12 +165,48 @@ def intent_router(state: State) -> dict:
     return {}
 
 
+async def _ensure_holding_address() -> str | None:
+    """
+    Make sure a holding-wallet address is configured before any monitor setup.
+
+    Returns the configured address on success, or None if the user cancelled
+    the prompt (the caller should bail out of monitor setup).
+    """
+    if engines.wallet.has_holding_address():
+        return engines.wallet.get_holding_address()
+
+    print("\nQVAC: Before we set up a monitor, I need your main (holding) wallet address.")
+    print("This is where funds will be returned via Umbra when monitors close.\n")
+
+    while True:
+        try:
+            raw = await asyncio.to_thread(input, "  Holding address: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        try:
+            engines.wallet.set_holding_address(raw)
+        except ValueError as e:
+            print(f"  Invalid: {e}. Try again or Ctrl-C to cancel.\n")
+            continue
+        addr = engines.wallet.get_holding_address()
+        print(f"  Saved: {addr}\n")
+        return addr
+
+
 async def deposit_earn_setup(state: State) -> dict:
     """
     Interactively collects a token choice (arrow-key menu) and launches
     a deposit_earn monitor. Runs the blocking menu in a thread.
     """
     from agent.terminal import select_token
+
+    holding_addr = await _ensure_holding_address()
+    if holding_addr is None:
+        return {
+            "messages": [AIMessage(content="Setup cancelled — no holding address provided.")],
+            "pending_action": None,
+        }
 
     print("\nQVAC: Let's set up your Deposit Earn monitor.")
 
@@ -196,15 +232,24 @@ async def deposit_earn_setup(state: State) -> dict:
         poll_interval=60,
     )
     store.register_monitor(monitor)
+
+    # Allocate a per-monitor HD wallet. The funding meta-address goes to the
+    # user so they can deposit via Umbra; the operating keypair will be used
+    # by chain actions.
+    monitor_wallet = engines.wallet.create_monitor_wallet(monitor.id)
+
     engines.polling.start(monitor)
 
     return {
         "messages": [AIMessage(content=(
             f"Deposit Earn monitor started for {token['symbol']}!\n\n"
-            f"  ID       : {monitor.id}\n"
-            f"  Token    : {token['symbol']} ({token['mint'][:8]}…)\n"
-            f"  Protocols: Jupiter Lend + Kamino KVaults\n"
-            f"  Interval : every {monitor.poll_interval}s\n\n"
+            f"  ID         : {monitor.id}\n"
+            f"  Token      : {token['symbol']} ({token['mint'][:8]}…)\n"
+            f"  Protocols  : Jupiter Lend + Kamino KVaults\n"
+            f"  Interval   : every {monitor.poll_interval}s\n"
+            f"  Funding    : {monitor_wallet.umbra_meta.meta_address}\n"
+            f"  Returns to : {holding_addr}\n\n"
+            f"Send funds to the funding address via Umbra to begin operations.\n"
             f"Say 'get signals' to check the latest APY recommendation.\n"
             f"Say 'list active monitors' to see all running monitors."
         ))],

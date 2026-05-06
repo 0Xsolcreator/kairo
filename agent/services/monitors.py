@@ -20,10 +20,13 @@ def render_active_monitors() -> str:
     lines = [f"{len(monitors)} active monitor(s):", ""]
     for m in monitors:
         sym = getattr(m.scope, "token_symbol", "?")
+        funding = engines.wallet.get_funding_address(m.id)
         lines.append(f"  • {m.id}")
         lines.append(f"      Type    : {m.type} — {sym}")
         lines.append(f"      Interval: every {m.poll_interval}s")
         lines.append(f"      Status  : {m.status.value}")
+        if funding:
+            lines.append(f"      Funding : {funding}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -36,6 +39,9 @@ def do_stop_monitor(monitor_id: str | None) -> str:
         return f"No active monitor found with ID '{monitor_id}'."
     engines.polling.stop(monitor_id)
     store.unregister_monitor(monitor_id)
+    # Mark the wallet record closed. Actual fund sweep-back to the holding
+    # address is the close-flow chain's job (not yet implemented).
+    engines.wallet.close_monitor_wallet(monitor_id)
     return f"Monitor '{monitor_id}' stopped and removed."
 
 
