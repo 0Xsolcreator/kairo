@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import agent.store as store
 from agent.analyzer import AnalyzerEngine
 from agent.analyzer.base import Decision
@@ -8,6 +10,8 @@ from agent.executor.debounce import DebouncedExecutor
 from agent.executor.deposit_earn import DepositEarnExecutor
 from agent.polling import PollingEngine
 from agent.wallet import WalletService
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Wallet service singleton
@@ -48,3 +52,19 @@ async def _on_decision(decision: Decision) -> None:
 
 analyzer = AnalyzerEngine(on_decision=_on_decision)
 polling = PollingEngine(on_data=analyzer.ingest)
+
+
+# ---------------------------------------------------------------------------
+# Startup restore
+# ---------------------------------------------------------------------------
+
+async def restore_active_monitors() -> None:
+    """
+    Reload monitors from DB and restart their polling tasks.
+    Call once at agent startup, before the interactive loop begins.
+    """
+    monitors = store.load_from_db()
+    for monitor in monitors:
+        polling.start(monitor)
+    if monitors:
+        logger.info("Restored %d monitor(s) from DB", len(monitors))

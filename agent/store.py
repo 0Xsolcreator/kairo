@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
 from collections import defaultdict, deque
 
+import agent.db as db
 from agent.analyzer.base import Decision
 from agent.schemas.monitor import Monitor
+
+logger = logging.getLogger(__name__)
 
 _MAX_SIGNALS = 100
 
@@ -21,11 +26,21 @@ def get_signals(monitor_id: str, limit: int = 10) -> list[Decision]:
 
 def register_monitor(monitor: Monitor) -> None:
     _monitors[monitor.id] = monitor
+    db.upsert_monitor(
+        id=monitor.id,
+        type=monitor.type,
+        status=monitor.status.value,
+        scope_json=json.dumps(monitor.scope.model_dump()),
+        source_json=json.dumps(monitor.source.model_dump()),
+        poll_interval=monitor.poll_interval,
+        created_at=monitor.created_at.isoformat(),
+    )
 
 
 def unregister_monitor(monitor_id: str) -> None:
     _monitors.pop(monitor_id, None)
     _signals.pop(monitor_id, None)
+    db.delete_monitor(monitor_id)
 
 
 def get_monitor(monitor_id: str) -> Monitor | None:
@@ -34,3 +49,23 @@ def get_monitor(monitor_id: str) -> Monitor | None:
 
 def list_monitors() -> list[Monitor]:
     return list(_monitors.values())
+
+
+def load_from_db() -> list[Monitor]:
+    """
+    Populate in-memory state from persisted active monitors.
+    Called once at agent startup before the event loop begins polling.
+    Already-registered monitors are skipped (idempotent).
+    """
+    rows = db.load_active_monitors()
+    restored: list[Monitor] = []
+    for row in rows:
+        if row["id"] in _monitors:
+            continue
+        try:
+            monitor = Monitor(**row)
+            _monitors[monitor.id] = monitor
+            restored.append(monitor)
+        except Exception:
+            logger.warning("Skipping malformed monitor record id=%s", row.get("id"))
+    return restored

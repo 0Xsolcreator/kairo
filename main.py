@@ -19,6 +19,8 @@ async def chat_loop(thread_id: str = "default") -> None:
     print("QVAC — Crypto Market Monitor Agent")
     print("Type 'exit' to quit.\n")
 
+    await agent.engines.restore_active_monitors()
+
     async with AsyncSqliteSaver.from_conn_string(_DB) as checkpointer:
         graph = make_graph(checkpointer)
         config = {"configurable": {"thread_id": thread_id}}
@@ -47,6 +49,7 @@ async def chat_loop(thread_id: str = "default") -> None:
 
 async def run_once(prompt: str, thread_id: str | None = None) -> str:
     import uuid
+    await agent.engines.restore_active_monitors()
     # One-shot calls always use a fresh thread so stale history never bleeds in.
     tid = thread_id or str(uuid.uuid4())
     async with AsyncSqliteSaver.from_conn_string(_DB) as checkpointer:
