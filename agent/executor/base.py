@@ -203,6 +203,10 @@ class BaseExecutor(ABC):
     @abstractmethod
     async def handle(self, decision: Decision) -> None: ...
 
+    def restore_cooldown(self, monitor_id: str) -> None:
+        """Reconstruct in-memory cooldown state from persistent storage.
+        No-op by default; override in wrappers that track cooldown (e.g. DebouncedExecutor)."""
+
 
 class ChainBasedExecutor(BaseExecutor):
     """

@@ -30,6 +30,12 @@ class ExecutorEngine:
     def register_executor(self, monitor_type: str, executor: BaseExecutor) -> None:
         self._executors[monitor_type] = executor
 
+    def restore_cooldowns(self, monitor_id: str, monitor_type: str) -> None:
+        """Delegate cooldown restoration to the executor registered for this monitor type."""
+        executor = self._executors.get(monitor_type)
+        if executor is not None:
+            executor.restore_cooldown(monitor_id)
+
     async def handle(self, decision: Decision) -> None:
         executor = self._executors.get(decision.monitor_type)
         if executor is None:

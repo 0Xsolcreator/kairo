@@ -277,6 +277,24 @@ def finish_execution(
         conn.close()
 
 
+def get_last_completed_execution_time(monitor_id: str) -> str | None:
+    """
+    Return the finished_at timestamp (UTC ISO string) of the most recent
+    chain execution with status='completed' for this monitor, or None if
+    there are no completed executions on record.
+    """
+    conn = _open()
+    try:
+        row = conn.execute(
+            """SELECT MAX(finished_at) FROM chain_executions
+               WHERE monitor_id = ? AND status = 'completed'""",
+            (monitor_id,),
+        ).fetchone()
+        return row[0] if row and row[0] else None
+    finally:
+        conn.close()
+
+
 async def async_start_execution(**kwargs) -> int:
     return await asyncio.to_thread(start_execution, **kwargs)
 

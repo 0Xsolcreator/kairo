@@ -61,10 +61,13 @@ polling = PollingEngine(on_data=analyzer.ingest)
 async def restore_active_monitors() -> None:
     """
     Reload monitors from DB and restart their polling tasks.
+    Also restores executor cooldown state so a restart doesn't bypass the
+    cooldown window on chains that fired shortly before the agent stopped.
     Call once at agent startup, before the interactive loop begins.
     """
     monitors = store.load_from_db()
     for monitor in monitors:
         polling.start(monitor)
+        executor.restore_cooldowns(monitor.id, monitor.type)
     if monitors:
         logger.info("Restored %d monitor(s) from DB", len(monitors))

@@ -14,16 +14,24 @@ guards before letting a Decision through to the inner executor:
      pass through and reset the consecutive-streak counter. Useful
      so a brief ERROR blip doesn't carry over into the streak math.
 
-State is per-monitor and lives in memory; if the agent restarts the
-streak resets. Cooldowns also reset on restart — accept this for now,
-or persist to db.py if it becomes important.
+Restart behaviour
+-----------------
+_streak is intentionally NOT restored on restart — streaks are transient
+debounce state; a clean slate after restart is safe and expected.
+
+_last_run IS restored via restore_cooldown(), which reads the most recent
+completed chain execution time from DB and reconstructs the monotonic
+timestamp. This prevents a restart from immediately re-firing a chain that
+is still within its cooldown window.
 """
 from __future__ import annotations
 
 import logging
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 
+import agent.db as db
 from agent.analyzer.base import Decision
 from agent.executor.base import BaseExecutor
 
@@ -47,6 +55,24 @@ class DebouncedExecutor(BaseExecutor):
         # per-monitor state
         self._streak: dict[str, tuple[str, int]] = {}      # monitor_id → (signal, count)
         self._last_run: dict[str, float] = defaultdict(float)
+
+    def restore_cooldown(self, monitor_id: str) -> None:
+        """
+        Reconstruct _last_run from the most recent completed chain execution
+        stored in DB. If the cooldown has already expired, nothing is written
+        (the default float(0) means "ran at epoch", i.e. cooldown long gone).
+        """
+        ts_str = db.get_last_completed_execution_time(monitor_id)
+        if ts_str is None:
+            return
+        last_finished = datetime.fromisoformat(ts_str)
+        elapsed = (datetime.now(timezone.utc) - last_finished).total_seconds()
+        if elapsed < self._cooldown_seconds:
+            self._last_run[monitor_id] = time.monotonic() - elapsed
+            logger.info(
+                "debounce monitor=%s cooldown restored: %.0fs elapsed of %.0fs",
+                monitor_id, elapsed, self._cooldown_seconds,
+            )
 
     async def handle(self, decision: Decision) -> None:
         mid = decision.monitor_id
