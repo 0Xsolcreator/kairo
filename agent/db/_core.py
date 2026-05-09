@@ -6,6 +6,13 @@ from datetime import datetime, timezone
 
 _DB_PATH = "agent_data.db"
 
+
+def _set_db_path(path: str) -> None:
+    """Override the database file used by all subsequent _open() calls.
+    Call this before creating engine singletons — e.g. pass ':memory:' in tests."""
+    global _DB_PATH
+    _DB_PATH = path
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitors (
     id            TEXT    PRIMARY KEY,

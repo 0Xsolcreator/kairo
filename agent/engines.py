@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import agent.store as store
 from agent.analyzer import AnalyzerEngine
@@ -13,61 +14,88 @@ from agent.wallet import WalletService
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Wallet service singleton
-# ---------------------------------------------------------------------------
-# Chain actions, the graph, and monitor services all reach the wallet
-# subsystem through this singleton: `from agent.engines import wallet`.
-
-wallet = WalletService()
 
 # ---------------------------------------------------------------------------
-# Executor wiring
+# Engines container
 # ---------------------------------------------------------------------------
-# Each monitor type registers its own executor here. Wrap in DebouncedExecutor
-# to control how often chains are allowed to fire — important for any executor
-# that performs on-chain actions.
 
-executor = ExecutorEngine()
+@dataclass
+class Engines:
+    """All runtime singletons, fully wired and ready to use."""
+    wallet:   WalletService
+    executor: ExecutorEngine
+    analyzer: AnalyzerEngine
+    polling:  PollingEngine
 
-executor.register_executor(
-    "deposit_earn",
-    DebouncedExecutor(
-        DepositEarnExecutor(),
-        consecutive_required=3,     # need 3 polls in a row agreeing before acting
-        cooldown_seconds=600.0,     # ...and 10 minutes between chain runs
-    ),
-)
-
-
-# ---------------------------------------------------------------------------
-# Decision pipeline
-# ---------------------------------------------------------------------------
-# polling → analyzer → (store signal + hand to executor)
-
-async def _on_decision(decision: Decision) -> None:
-    store.push_signal(decision)
-    await executor.handle(decision)
-
-
-analyzer = AnalyzerEngine(on_decision=_on_decision)
-polling = PollingEngine(on_data=analyzer.ingest)
+    async def restore_active_monitors(self) -> None:
+        """
+        Reload monitors from DB and restart their polling tasks.
+        Also restores executor cooldown state so a restart doesn't bypass the
+        cooldown window on chains that fired shortly before the agent stopped.
+        """
+        monitors = store.load_from_db()
+        for monitor in monitors:
+            self.polling.start(monitor)
+            self.executor.restore_cooldowns(monitor.id, monitor.type)
+        if monitors:
+            logger.info("Restored %d monitor(s) from DB", len(monitors))
 
 
 # ---------------------------------------------------------------------------
-# Startup restore
+# Factory
 # ---------------------------------------------------------------------------
+
+def create_engines(db_path: str = "agent_data.db") -> Engines:
+    """
+    Create and wire all runtime singletons.
+
+    Pass db_path=':memory:' in tests to get a fully isolated instance
+    without touching the on-disk database.
+    """
+    from agent.db._core import _set_db_path
+    _set_db_path(db_path)
+
+    _wallet = WalletService()
+
+    _executor = ExecutorEngine()
+    _executor.register_executor(
+        "deposit_earn",
+        DebouncedExecutor(
+            DepositEarnExecutor(),
+            consecutive_required=3,
+            cooldown_seconds=600.0,
+        ),
+    )
+
+    async def _on_decision(decision: Decision) -> None:
+        store.push_signal(decision)
+        await _executor.handle(decision)
+
+    _analyzer = AnalyzerEngine(on_decision=_on_decision)
+    _polling  = PollingEngine(on_data=_analyzer.ingest)
+
+    return Engines(
+        wallet=_wallet,
+        executor=_executor,
+        analyzer=_analyzer,
+        polling=_polling,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Application-level singletons
+# ---------------------------------------------------------------------------
+# Existing callers (graph.py, services/, action files, main.py) all reference
+# these module-level names directly and continue to work unchanged.
+
+_default = create_engines()
+
+wallet   = _default.wallet
+executor = _default.executor
+analyzer = _default.analyzer
+polling  = _default.polling
+
 
 async def restore_active_monitors() -> None:
-    """
-    Reload monitors from DB and restart their polling tasks.
-    Also restores executor cooldown state so a restart doesn't bypass the
-    cooldown window on chains that fired shortly before the agent stopped.
-    Call once at agent startup, before the interactive loop begins.
-    """
-    monitors = store.load_from_db()
-    for monitor in monitors:
-        polling.start(monitor)
-        executor.restore_cooldowns(monitor.id, monitor.type)
-    if monitors:
-        logger.info("Restored %d monitor(s) from DB", len(monitors))
+    """Module-level convenience wrapper used by main.py at startup."""
+    await _default.restore_active_monitors()
