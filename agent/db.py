@@ -111,7 +111,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def _open() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(_DB_PATH, timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     _ensure_schema(conn)
     return conn
 
