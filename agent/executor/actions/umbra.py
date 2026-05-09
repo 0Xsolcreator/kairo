@@ -227,6 +227,50 @@ class DepositToEncrypted(Action):
             raise ChainAbort(f"eta deposit failed: {e}") from e
 
 
+class SeedFromEncrypted(Action):
+    """
+    Best-effort seed: read the active user's encrypted balance and, if it
+    is at or above `min_amount`, withdraw the full amount to the public ATA
+    so a downstream deposit action can spend it.
+
+    Stores the withdrawn amount (base units) in `ctx.state[<into_key>]`.
+    Stores 0 and continues cleanly — no ChainAbort — if the balance is
+    absent or below `min_amount`. This lets rebalance steps that follow
+    still run normally when there is nothing to seed.
+
+    Place immediately after EnsureUmbraUser; follow with a deposit action
+    that has `skip_if_zero=True` so the deposit is skipped when no seed
+    was available.
+    """
+
+    def __init__(
+        self,
+        into_key: str = "encrypted_seed",
+        min_amount: int = 1,
+    ) -> None:
+        self._into_key = into_key
+        self._min_amount = min_amount
+
+    async def run(self, ctx: ActionContext) -> None:
+        mint = _resolve_token_mint(ctx)
+        balance = await _client.eta_balance(mint)
+        if balance < self._min_amount:
+            ctx.state[self._into_key] = 0
+            logger.debug(
+                "encrypted balance %d below minimum %d — skipping seed withdrawal",
+                balance, self._min_amount,
+            )
+            return
+        ctx.state[self._into_key] = balance
+        if ctx.dry_run:
+            logger.info("[dry_run] would seed: eta withdraw %d of %s", balance, mint)
+            return
+        try:
+            await _client.eta_withdraw(mint, balance)
+        except UmbraCommandFailed as e:
+            raise ChainAbort(f"seed: eta withdraw failed: {e}") from e
+
+
 class SendToHolding(Action):
     """
     Close-flow action: send funds from the active user's public wallet
