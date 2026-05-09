@@ -218,9 +218,21 @@ async def deposit_earn_setup(state: State) -> dict:
             "pending_action": None,
         }
 
+    print("\nJupiter API key (from beta.jup.ag/api — required for executor actions):")
+    try:
+        jup_api_key = (await asyncio.to_thread(input, "  Key: ")).strip() or None
+    except (EOFError, KeyboardInterrupt):
+        return {
+            "messages": [AIMessage(content="Monitor setup cancelled.")],
+            "pending_action": None,
+        }
+    if not jup_api_key:
+        print("  Warning: no API key set — polling will be unauthenticated and executor actions will abort.\n")
+
     scope = DepositEarnScope(
         token_symbol=token["symbol"],
         token_mint=token["mint"],
+        jup_api_key=jup_api_key,
     )
     monitor = Monitor(
         type="deposit_earn",
@@ -257,8 +269,10 @@ async def deposit_earn_setup(state: State) -> dict:
     }
 
 
+_MAX_HISTORY = 20  # keep last N messages to stay within local model context limit
+
 async def call_model(state: State) -> dict:
-    messages = [SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"]
+    messages = [SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"][-_MAX_HISTORY:]
     response = await llm_with_tools.ainvoke(messages)
 
     clean = _strip_think(response.content)
