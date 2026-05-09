@@ -21,6 +21,7 @@ per monitor means a DB compromise alone can't move funds.
 from __future__ import annotations
 
 import logging
+import os
 
 import agent.db as db
 from agent.wallet.derive import (
@@ -45,6 +46,14 @@ class HoldingWalletNotSet(RuntimeError):
 class WalletService:
     def __init__(self) -> None:
         self._seed: bytes | None = None  # cached after first derivation
+        # shared mode: all monitors derive from index 0 (same wallet).
+        # Useful for testing — set QVAC_WALLET_MODE=shared to enable.
+        self._shared = os.environ.get("QVAC_WALLET_MODE", "hd").lower() == "shared"
+        if self._shared:
+            logger.warning(
+                "QVAC_WALLET_MODE=shared — all monitors will use the same "
+                "wallet. Do not use this in production."
+            )
 
     # ------------------------------------------------------------------
     # Master seed
@@ -102,7 +111,15 @@ class WalletService:
         Allocate the next derivation index, derive the keys, and persist
         the public-only record. Idempotent: returns the existing wallet
         if one already exists for `monitor_id`.
+
+        In shared mode (QVAC_WALLET_MODE=shared) all monitors derive from
+        index 0. No DB row is written — derivation happens on demand in
+        get_monitor_wallet so the UNIQUE constraint on derivation_index is
+        never touched.
         """
+        if self._shared:
+            return self._derive_shared(monitor_id)
+
         existing = self.get_monitor_wallet(monitor_id)
         if existing is not None:
             return existing
@@ -126,6 +143,9 @@ class WalletService:
         )
 
     def get_monitor_wallet(self, monitor_id: str) -> MonitorWallet | None:
+        if self._shared:
+            return self._derive_shared(monitor_id)
+
         record = db.get_monitor_wallet(monitor_id)
         if record is None:
             return None
@@ -134,6 +154,17 @@ class WalletService:
         return MonitorWallet(
             monitor_id=monitor_id,
             derivation_index=record["derivation_index"],
+            operating=operating,
+            umbra_meta=umbra_meta,
+        )
+
+    def _derive_shared(self, monitor_id: str) -> MonitorWallet:
+        """Derive index-0 wallet without touching the DB (shared-mode only)."""
+        seed = self._ensure_seed()
+        operating, umbra_meta = derive_monitor_wallet(seed, 0)
+        return MonitorWallet(
+            monitor_id=monitor_id,
+            derivation_index=0,
             operating=operating,
             umbra_meta=umbra_meta,
         )
