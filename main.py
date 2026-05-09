@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
+
+logging.basicConfig(level=logging.WARNING)
+logging.getLogger("agent.executor").setLevel(logging.DEBUG)
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
