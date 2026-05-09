@@ -10,7 +10,7 @@ logging.getLogger("agent.executor").setLevel(logging.DEBUG)
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 import agent.engines  # initialises polling + analyzer singletons
-from agent.graph import _strip_think, make_graph
+from agent.graph import make_graph
 
 _DB = "agent_memory.db"
 
@@ -40,7 +40,7 @@ async def chat_loop(thread_id: str = "default") -> None:
             result = await graph.ainvoke(
                 {"messages": [("human", prompt)]}, config=config
             )
-            reply = _strip_think(result["messages"][-1].content)
+            reply = result["messages"][-1].content
             print(f"\nQVAC: {reply}\n")
 
     await agent.engines.polling.stop_all()
