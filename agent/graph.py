@@ -12,10 +12,9 @@ from langgraph.prebuilt import ToolNode
 from typing_extensions import NotRequired, TypedDict
 
 import agent.engines as engines
-import agent.store as store
 from agent.llm import llm
-from agent.schemas.monitor import DataSource, DepositEarnScope, Monitor, SUPPORTED_TOKENS
 from agent.services import monitors as monitor_services
+from agent.services.deposit_earn import launch_deposit_earn_monitor
 from agent.tools import tools
 from agent.tools.monitors import catalogue_text
 
@@ -196,8 +195,8 @@ async def _ensure_holding_address() -> str | None:
 
 async def deposit_earn_setup(state: State) -> dict:
     """
-    Interactively collects a token choice (arrow-key menu) and launches
-    a deposit_earn monitor. Runs the blocking menu in a thread.
+    Collects I/O (holding address, token, API key) then delegates all
+    monitor-creation side-effects to the service layer.
     """
     from agent.terminal import select_token
 
@@ -229,37 +228,20 @@ async def deposit_earn_setup(state: State) -> dict:
     if not jup_api_key:
         print("  Warning: no API key set — polling will be unauthenticated and executor actions will abort.\n")
 
-    scope = DepositEarnScope(
+    result = launch_deposit_earn_monitor(
         token_symbol=token["symbol"],
         token_mint=token["mint"],
         jup_api_key=jup_api_key,
     )
-    monitor = Monitor(
-        type="deposit_earn",
-        scope=scope,
-        source=DataSource(endpoints=[
-            "https://api.jup.ag/lend/v1",
-            "https://api.kamino.finance",
-        ]),
-        poll_interval=60,
-    )
-    store.register_monitor(monitor)
-
-    # Allocate a per-monitor HD wallet. The funding meta-address goes to the
-    # user so they can deposit via Umbra; the operating keypair will be used
-    # by chain actions.
-    monitor_wallet = engines.wallet.create_monitor_wallet(monitor.id)
-
-    engines.polling.start(monitor)
 
     return {
         "messages": [AIMessage(content=(
             f"Deposit Earn monitor started for {token['symbol']}!\n\n"
-            f"  ID         : {monitor.id}\n"
+            f"  ID         : {result.monitor.id}\n"
             f"  Token      : {token['symbol']} ({token['mint'][:8]}…)\n"
             f"  Protocols  : Jupiter Lend + Kamino KVaults\n"
-            f"  Interval   : every {monitor.poll_interval}s\n"
-            f"  Funding    : {monitor_wallet.operating.address}\n"
+            f"  Interval   : every {result.monitor.poll_interval}s\n"
+            f"  Funding    : {result.funding_address}\n"
             f"  Returns to : {holding_addr}\n\n"
             f"Send funds to the funding address to begin operations.\n"
             f"Say 'get signals' to check the latest APY recommendation.\n"

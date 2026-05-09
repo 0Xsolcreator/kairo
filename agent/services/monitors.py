@@ -1,9 +1,11 @@
 """
-Single source of truth for monitor list/stop/signal operations.
+Generic monitor operations: list, stop, and signal rendering.
 
-Both the regex intent router (agent/graph.py) and the LangChain @tool
-wrappers (agent/tools/monitors.py) call into this module, so behaviour
-and output formatting stay aligned across the two entry points.
+Both the regex intent router (agent/graph.py) and the LangChain tool
+wrappers (agent/tools/monitors.py) call into this module.
+
+Monitor-type-specific launch logic lives in its own service file:
+  agent/services/deposit_earn.py  — launch_deposit_earn_monitor
 """
 from __future__ import annotations
 
