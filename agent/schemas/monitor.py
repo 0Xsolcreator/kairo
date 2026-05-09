@@ -39,6 +39,27 @@ SUPPORTED_TOKENS: dict[str, str] = {
     "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
 }
 
+# On-chain decimals for each supported mint. The Kamino KTX API takes amounts
+# in decimal token format (e.g. "1.234567"), so we need this to convert from
+# base units. Keep in sync with SUPPORTED_TOKENS when adding new tokens.
+TOKEN_DECIMALS_BY_MINT: dict[str, int] = {
+    "So11111111111111111111111111111111111111112": 9,   # wSOL
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 6,  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": 6,  # USDT
+}
+
+
+def get_token_decimals(token_mint: str) -> int:
+    """Return the on-chain decimals for a supported token mint."""
+    try:
+        return TOKEN_DECIMALS_BY_MINT[token_mint]
+    except KeyError as e:
+        raise ValueError(
+            f"unknown token_mint {token_mint!r} — extend TOKEN_DECIMALS_BY_MINT "
+            "when adding a new supported token"
+        ) from e
+
+
 _SUPPORTED_SYMBOLS = tuple(SUPPORTED_TOKENS.keys())
 
 
@@ -49,6 +70,7 @@ _SUPPORTED_SYMBOLS = tuple(SUPPORTED_TOKENS.keys())
 class DepositEarnScope(BaseModel):
     token_symbol: Literal["wSOL", "USDC", "USDT"]
     token_mint: str
+    jup_api_key: str | None = None
 
     @field_validator("token_mint")
     @classmethod
