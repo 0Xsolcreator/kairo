@@ -47,20 +47,6 @@ async def chat_loop(thread_id: str = "default") -> None:
     print("All monitors stopped. Goodbye.")
 
 
-async def run_once(prompt: str, thread_id: str | None = None) -> str:
-    import uuid
-    await agent.engines.restore_active_monitors()
-    # One-shot calls always use a fresh thread so stale history never bleeds in.
-    tid = thread_id or str(uuid.uuid4())
-    async with AsyncSqliteSaver.from_conn_string(_DB) as checkpointer:
-        graph = make_graph(checkpointer)
-        config = {"configurable": {"thread_id": tid}}
-        result = await graph.ainvoke(
-            {"messages": [("human", prompt)]}, config=config
-        )
-        return result["messages"][-1].content
-
-
 if __name__ == "__main__":
     args = sys.argv[1:]
     thread_id = "default"
@@ -68,8 +54,4 @@ if __name__ == "__main__":
     if args and args[0].startswith("--thread="):
         thread_id = args.pop(0).split("=", 1)[1]
 
-    if args:
-        # One-shot mode: python main.py "your prompt"
-        print(asyncio.run(run_once(" ".join(args), thread_id=thread_id)))
-    else:
-        asyncio.run(chat_loop(thread_id=thread_id))
+    asyncio.run(chat_loop(thread_id=thread_id))
