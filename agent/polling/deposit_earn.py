@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 
@@ -20,8 +21,8 @@ _MIN_TVL_USD = 100_000.0
 # How many top vaults (by shares issued) to fetch metrics for per discovery.
 _KAMINO_CANDIDATE_LIMIT = 15
 
-# Re-discover best vault every N polls (avoids hammering /kvaults/vaults).
-_VAULT_CACHE_TTL = 10
+# Re-discover best vault at most once per this many seconds.
+_VAULT_CACHE_TTL_SECONDS = 600.0  # 10 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -57,22 +58,19 @@ class _KaminoFetcher:
       3. Fetching metrics in parallel and filtering by minimum TVL.
       4. Returning the vault with the highest current net APY.
 
-    Results are cached for _VAULT_CACHE_TTL poll cycles to reduce API load.
+    The discovery result is cached for _VAULT_CACHE_TTL_SECONDS so the
+    full vault list is not fetched on every poll tick.
     """
 
     def __init__(self) -> None:
-        # mint → (best_vault_address, poll_count_at_last_discovery)
-        self._cache: dict[str, tuple[str, int]] = {}
-        self._poll_count: dict[str, int] = {}
+        # mint → (best_vault_address, monotonic time of last discovery)
+        self._cache: dict[str, tuple[str, float]] = {}
 
     async def fetch(
         self, client: httpx.AsyncClient, token_mint: str
     ) -> dict | None:
-        self._poll_count[token_mint] = self._poll_count.get(token_mint, 0) + 1
-        count = self._poll_count[token_mint]
-
-        cached_addr, cached_at = self._cache.get(token_mint, (None, 0))
-        if cached_addr and (count - cached_at) < _VAULT_CACHE_TTL:
+        cached_addr, cached_at = self._cache.get(token_mint, (None, 0.0))
+        if cached_addr and (time.monotonic() - cached_at) < _VAULT_CACHE_TTL_SECONDS:
             return await self._vault_metrics(client, cached_addr)
 
         # Re-discover
@@ -80,7 +78,7 @@ class _KaminoFetcher:
         if best_addr is None:
             return None
 
-        self._cache[token_mint] = (best_addr, count)
+        self._cache[token_mint] = (best_addr, time.monotonic())
         return await self._vault_metrics(client, best_addr)
 
     async def _discover_best_vault(
