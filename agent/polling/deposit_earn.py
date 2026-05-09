@@ -29,8 +29,14 @@ _VAULT_CACHE_TTL = 10
 # ---------------------------------------------------------------------------
 
 class _JupiterFetcher:
-    async def fetch(self, client: httpx.AsyncClient, token_mint: str) -> dict | None:
-        resp = await client.get(f"{_JUP_BASE}/earn/tokens", timeout=15.0)
+    async def fetch(
+        self,
+        client: httpx.AsyncClient,
+        token_mint: str,
+        api_key: str | None = None,
+    ) -> dict | None:
+        headers = {"x-api-key": api_key} if api_key else {}
+        resp = await client.get(f"{_JUP_BASE}/earn/tokens", headers=headers, timeout=15.0)
         resp.raise_for_status()
         for entry in resp.json():
             if entry.get("assetAddress") == token_mint:
@@ -170,7 +176,7 @@ class DepositEarnPoller(BasePoller):
 
         async with httpx.AsyncClient() as client:
             jup_data, kamino_data = await asyncio.gather(
-                self._jup.fetch(client, scope.token_mint),
+                self._jup.fetch(client, scope.token_mint, api_key=scope.jup_api_key),
                 self._kamino.fetch(client, scope.token_mint),
                 return_exceptions=False,
             )
