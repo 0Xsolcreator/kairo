@@ -5,7 +5,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-_DB_PATH = "agent_memory.db"
+_DB_PATH = "agent_data.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS deposit_earn_polls (
