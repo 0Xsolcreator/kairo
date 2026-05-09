@@ -48,6 +48,7 @@ is a separate schema-change PR (persist deposited-vault per monitor).
 """
 from __future__ import annotations
 
+from agent.analyzer.deposit_earn import Signal
 from agent.executor.actions import (
     DepositToJupiter,
     DepositToKamino,
@@ -68,16 +69,6 @@ class DepositEarnExecutor(ChainBasedExecutor):
         super().__init__(
             chains={
                 # ----------------------------------------------------------
-                # JUPITER signal: seed from encrypted + rebalance Kamino → Jupiter
-                # ----------------------------------------------------------
-                # Phase 1 (seed): if the encrypted balance is non-zero,
-                # withdraw it to the public ATA and deposit directly into
-                # Jupiter Lend. Skipped cleanly when encrypted balance is 0.
-                #
-                # Phase 2 (rebalance): read the Kamino underlying balance,
-                # withdraw, and deposit into Jupiter. Currently halts at
-                # LoadKaminoUnderlyingBalance (stub); see module docstring.
-                # ----------------------------------------------------------
                 # JUPITER signal: move everything available → Jupiter Lend
                 # ----------------------------------------------------------
                 # Collects from all sources into the ATA, then deposits the
@@ -88,7 +79,7 @@ class DepositEarnExecutor(ChainBasedExecutor):
                 # LoadKaminoUnderlyingBalance is still a stub — the chain
                 # aborts there but any pre-existing ATA balance is still
                 # picked up if the stub is removed.
-                "JUPITER": ActionChain(actions=[
+                Signal.JUPITER: ActionChain(actions=[
                     EnsureUmbraUser(),
                     SeedFromEncrypted(into_key="encrypted_seed"),            # Umbra → ATA
                     LoadKaminoUnderlyingBalance(into_key="kamino_amount"),
@@ -107,7 +98,7 @@ class DepositEarnExecutor(ChainBasedExecutor):
                 # Collects from all sources into the ATA, then deposits the
                 # total. Handles stuck funds, direct deposits, and rebalances
                 # in one sweep.
-                "KAMINO": ActionChain(actions=[
+                Signal.KAMINO: ActionChain(actions=[
                     EnsureUmbraUser(),
                     SeedFromEncrypted(into_key="encrypted_seed"),            # Umbra → ATA
                     LoadJupiterPosition(into_key="jupiter_amount"),

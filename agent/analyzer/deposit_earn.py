@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+from enum import Enum
+
 from agent.analyzer.base import BaseAnalyzer, Decision
 from agent.schemas.monitor import Monitor, DepositEarnScope
+
+
+class Signal(str, Enum):
+    JUPITER = "JUPITER"
+    KAMINO  = "KAMINO"
+    EQUAL   = "EQUAL"
+    ERROR   = "ERROR"
+
+    def __str__(self) -> str:
+        return self.value
 
 # APY delta below which the two protocols are considered equivalent.
 _EQUAL_THRESHOLD = 0.001          # 0.1 percentage points (as decimal)
@@ -38,7 +50,7 @@ class DepositEarnAnalyzer(BaseAnalyzer):
             return Decision(
                 monitor_id=monitor.id,
                 monitor_type=monitor.type,
-                signal="ERROR",
+                signal=Signal.ERROR,
                 reason="Both Jupiter and Kamino returned no data for this token.",
             )
 
@@ -132,13 +144,13 @@ class DepositEarnAnalyzer(BaseAnalyzer):
         # Only one protocol available
         if jup_apy is None:
             return (
-                "KAMINO",
+                Signal.KAMINO,
                 f"Jupiter has no data for {sym} — Kamino: {_pct(kamino_apy):.2f}% APY.",
                 meta,
             )
         if kamino_apy is None:
             return (
-                "JUPITER",
+                Signal.JUPITER,
                 f"Kamino has no data for {sym} — Jupiter: {_pct(jup_apy):.2f}% APY.",
                 meta,
             )
@@ -151,7 +163,7 @@ class DepositEarnAnalyzer(BaseAnalyzer):
             if meta.get("kamino_yield_volatile"):
                 note = " Kamino yield has been volatile (7d avg differs >20%)."
             return (
-                "EQUAL",
+                Signal.EQUAL,
                 (
                     f"Near-equal yields for {sym}: "
                     f"Jupiter {_pct(jup_apy):.2f}% vs Kamino {_pct(kamino_apy):.2f}%.{note}"
@@ -161,7 +173,7 @@ class DepositEarnAnalyzer(BaseAnalyzer):
 
         if delta > 0:
             return (
-                "JUPITER",
+                Signal.JUPITER,
                 (
                     f"Jupiter leads for {sym}: {_pct(jup_apy):.2f}% "
                     f"vs Kamino {_pct(kamino_apy):.2f}% "
@@ -174,7 +186,7 @@ class DepositEarnAnalyzer(BaseAnalyzer):
         if meta.get("kamino_yield_volatile"):
             volatile_note = " Note: Kamino yield has been volatile (7d avg differs >20%)."
         return (
-            "KAMINO",
+            Signal.KAMINO,
             (
                 f"Kamino leads for {sym}: {_pct(kamino_apy):.2f}% "
                 f"vs Jupiter {_pct(jup_apy):.2f}% "
