@@ -74,14 +74,15 @@ CREATE TABLE IF NOT EXISTS holding_wallet (
 -- public material only. Private keys are re-derived from the master
 -- mnemonic on demand and never persisted.
 CREATE TABLE IF NOT EXISTS monitor_wallets (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    monitor_id          TEXT    NOT NULL UNIQUE,
-    derivation_index    INTEGER NOT NULL UNIQUE,
-    operating_pubkey    TEXT    NOT NULL,
-    umbra_meta_address  TEXT    NOT NULL,
-    status              TEXT    NOT NULL DEFAULT 'active',  -- 'active' | 'closed'
-    created_at          TEXT    NOT NULL,
-    closed_at           TEXT
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    monitor_id              TEXT    NOT NULL UNIQUE,
+    derivation_index        INTEGER NOT NULL UNIQUE,
+    operating_pubkey        TEXT    NOT NULL,
+    umbra_meta_address      TEXT    NOT NULL,
+    status                  TEXT    NOT NULL DEFAULT 'active',  -- 'active' | 'closed'
+    created_at              TEXT    NOT NULL,
+    closed_at               TEXT,
+    deposited_kamino_vault  TEXT                                -- vault we last deposited into
 );
 CREATE INDEX IF NOT EXISTS idx_monitor_wallets_monitor
     ON monitor_wallets(monitor_id);
@@ -95,7 +96,18 @@ def _safe_json(obj: object) -> str:
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply additive schema changes that can't be expressed as CREATE IF NOT EXISTS."""
+    try:
+        conn.execute(
+            "ALTER TABLE monitor_wallets ADD COLUMN deposited_kamino_vault TEXT"
+        )
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
 
 def _open() -> sqlite3.Connection:
@@ -412,5 +424,31 @@ def mark_monitor_wallet_closed(monitor_id: str) -> None:
             (datetime.now(timezone.utc).isoformat(), monitor_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def set_kamino_deposited_vault(monitor_id: str, vault_address: str) -> None:
+    """Record which Kamino vault funds were most recently deposited into."""
+    conn = _open()
+    try:
+        conn.execute(
+            "UPDATE monitor_wallets SET deposited_kamino_vault=? WHERE monitor_id=?",
+            (vault_address, monitor_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_kamino_deposited_vault(monitor_id: str) -> str | None:
+    """Return the Kamino vault last deposited into for this monitor, or None."""
+    conn = _open()
+    try:
+        row = conn.execute(
+            "SELECT deposited_kamino_vault FROM monitor_wallets WHERE monitor_id=?",
+            (monitor_id,),
+        ).fetchone()
+        return row[0] if row else None
     finally:
         conn.close()

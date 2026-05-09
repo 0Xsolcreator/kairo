@@ -5,13 +5,16 @@ Each action delegates to KaminoClient (agent/clients/kamino.py).
 
 Vault resolution
 ----------------
-Kamino has many vaults per token; the polling/analyzer pipeline picks
-the best one and surfaces it as `decision.metadata["kamino_vault"]`.
-Actions read that key for the *target* vault on a deposit. For withdraws,
-the persisted vault address (the one we deposited into earlier) should
-override the analyzer's current pick — see KaminoClient docstring on the
-deposit-vault binding. Until that persistence layer lands, withdraws use
-the metadata field too; flag this as a known gap to fix before live use.
+Two helpers handle vault address resolution:
+
+  _resolve_deposit_vault  — reads decision.metadata["kamino_vault"], the
+    current analyzer pick. Used only by DepositToKamino (we deposit where
+    the analyzer says is best right now).
+
+  _resolve_deposited_vault — reads the vault address we previously wrote
+    to DB after a successful deposit. Used by WithdrawFromKamino and
+    LoadKaminoUnderlyingBalance. This is the vault our funds are actually
+    in, regardless of what the analyzer currently recommends.
 
 Token decimals
 --------------
@@ -24,8 +27,10 @@ wSOL (9).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
+import agent.db as db
 from agent.clients.kamino import KaminoClient, KaminoError, KaminoNotImplemented
 from agent.executor.base import Action, ActionContext, ChainAbort
 from agent.schemas.monitor import get_token_decimals
@@ -47,13 +52,28 @@ def _resolve_scope(ctx: ActionContext):
     return monitor.scope
 
 
-def _resolve_vault(ctx: ActionContext) -> str:
-    """Pull the kamino vault address from the analyzer's decision metadata."""
+def _resolve_deposit_vault(ctx: ActionContext) -> str:
+    """For deposits: the current analyzer pick from decision metadata."""
     vault = ctx.decision.metadata.get("kamino_vault")
     if not vault:
         raise ChainAbort(
             "no kamino_vault in decision.metadata — run the polling+analyzer "
             "pipeline at least once before invoking a Kamino chain"
+        )
+    return vault
+
+
+def _resolve_deposited_vault(ctx: ActionContext) -> str:
+    """
+    For withdraws/reads: the vault we actually deposited into, from DB.
+    This is authoritative — it won't rotate even if the analyzer's current
+    best vault has changed since the deposit.
+    """
+    vault = db.get_kamino_deposited_vault(ctx.decision.monitor_id)
+    if not vault:
+        raise ChainAbort(
+            "no Kamino deposit on record for this monitor — "
+            "nothing to withdraw (has a KAMINO signal completed first?)"
         )
     return vault
 
@@ -95,8 +115,8 @@ def _operating_keypair(ctx: ActionContext):
 
 class LoadKaminoPosition(Action):
     """
-    Read the current Kamino position in the analyzer-chosen vault and
-    store it under `ctx.state[<into_key>]`.
+    Read the current Kamino position in the vault we last deposited into
+    and store it under `ctx.state[<into_key>]`.
 
     UNITS: returns share units, not underlying token base units. Suitable
     for presence checks via RequireMinimum (zero is zero in either unit
@@ -109,7 +129,7 @@ class LoadKaminoPosition(Action):
         self._into_key = into_key
 
     async def run(self, ctx: ActionContext) -> None:
-        vault = _resolve_vault(ctx)
+        vault = _resolve_deposited_vault(ctx)
         try:
             ctx.state[self._into_key] = await _client.get_position(
                 _operating_keypair(ctx), vault,
@@ -120,21 +140,23 @@ class LoadKaminoPosition(Action):
 
 class LoadKaminoUnderlyingBalance(Action):
     """
-    Read the current Kamino position expressed in underlying token base
-    units and store it under `ctx.state[<into_key>]` (default
-    'kamino_underlying'). This is the value that should be passed to
+    Read the Kamino position in the vault we last deposited into, expressed
+    in underlying token base units, and store it under `ctx.state[<into_key>]`
+    (default 'kamino_underlying'). This is the value that should be passed to
     `WithdrawFromKamino`'s `amount_key`.
 
-    Backed by `KaminoClient.get_underlying_balance()`. Raises ChainAbort
-    cleanly while that client method is still a stub — the rebalance chain
-    halts with a clear "not implemented yet" instead of mis-scaling funds.
+    Reads from the persisted deposited vault — not the analyzer's current pick
+    — so it stays correct even if the best vault has rotated since the deposit.
+
+    Raises ChainAbort cleanly while KaminoClient.get_underlying_balance() is
+    still a stub.
     """
 
     def __init__(self, into_key: str = "kamino_underlying") -> None:
         self._into_key = into_key
 
     async def run(self, ctx: ActionContext) -> None:
-        vault = _resolve_vault(ctx)
+        vault = _resolve_deposited_vault(ctx)
         try:
             ctx.state[self._into_key] = await _client.get_underlying_balance(
                 _operating_keypair(ctx), vault,
@@ -147,12 +169,13 @@ class DepositToKamino(Action):
     """
     Deposit `amount` (base units) into the analyzer-chosen vault.
 
-    Reads amount from ctx.state[<amount_key>]. Stores the tx signature at
-    ctx.state[<sig_key>] (default 'kamino_deposit_sig').
+    Reads amount from ctx.state[<amount_key>]. After a successful on-chain
+    deposit, persists the vault address to DB so subsequent withdrawals
+    target the correct vault even if the analyzer's recommendation rotates.
+    Stores the tx signature at ctx.state[<sig_key>] (default 'kamino_deposit_sig').
 
     Set `skip_if_zero=True` when the amount may legitimately be 0 and the
-    deposit should be a no-op rather than a ChainAbort (e.g. after
-    SeedFromEncrypted when no encrypted balance was available).
+    deposit should be a no-op rather than a ChainAbort.
     """
 
     def __init__(
@@ -166,7 +189,7 @@ class DepositToKamino(Action):
         self._skip_if_zero = skip_if_zero
 
     async def run(self, ctx: ActionContext) -> None:
-        vault = _resolve_vault(ctx)
+        vault = _resolve_deposit_vault(ctx)
         value = ctx.state.get(self._amount_key)
         if self._skip_if_zero and (not isinstance(value, int) or value == 0):
             logger.debug("skipping kamino deposit: %s is zero", self._amount_key)
@@ -184,19 +207,19 @@ class DepositToKamino(Action):
             ctx.state[self._sig_key] = sig
         except (KaminoNotImplemented, KaminoError) as e:
             raise ChainAbort(str(e)) from e
+        # Persist the vault so future withdrawals target the right address.
+        await asyncio.to_thread(db.set_kamino_deposited_vault, ctx.decision.monitor_id, vault)
 
 
 class WithdrawFromKamino(Action):
     """
-    Withdraw `amount` (base units) from the kamino vault back to the
-    operating wallet's public balance.
+    Withdraw `amount` (base units) from the vault we previously deposited
+    into, back to the operating wallet's public balance.
 
-    KNOWN GAP: vault address is currently read from
-    decision.metadata["kamino_vault"], which reflects the analyzer's
-    *current* best pick. The vault we deposited into may differ if the
-    analyzer rotated between deposit and withdraw. Persist the
-    deposited-vault address per monitor and override here once that
-    persistence layer lands (see KaminoClient module docstring).
+    Vault address is read from DB (set by DepositToKamino on a prior chain
+    run) — not from decision.metadata. This is intentional: the analyzer's
+    current best vault may have rotated since the deposit, so using metadata
+    would target the wrong vault and move zero funds.
 
     Reads amount from ctx.state[<amount_key>]. Stores tx signature at
     ctx.state[<sig_key>] (default 'kamino_withdraw_sig').
@@ -216,7 +239,7 @@ class WithdrawFromKamino(Action):
         self._skip_if_zero = skip_if_zero
 
     async def run(self, ctx: ActionContext) -> None:
-        vault = _resolve_vault(ctx)
+        vault = _resolve_deposited_vault(ctx)
         value = ctx.state.get(self._amount_key)
         if self._skip_if_zero and (not isinstance(value, int) or value == 0):
             logger.debug("skipping kamino withdraw: %s is zero", self._amount_key)

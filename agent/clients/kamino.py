@@ -30,15 +30,12 @@ the action layer) so the same client instance works across USDC (6), USDT
 Vault selection
 ---------------
 Kamino has many vaults per token. The polling/analyzer pipeline picks the
-best one and surfaces it as `decision.metadata["kamino_vault"]`. Actions
-read that key when they need to know which vault to interact with.
-
-Position-vault binding: the vault you deposited into is the only vault you
-can withdraw from. If the analyzer's "best vault" rotates between deposit
-and withdraw, withdrawing from the new vault would move zero funds. Persist
-the chosen vault address per monitor (extend monitor_wallets or add a
-monitor_positions table) so `withdraw` can use the correct vault even after
-the recommendation rotates. KNOWN GAP — see action layer for current behavior.
+best one and surfaces it as `decision.metadata["kamino_vault"]`. Deposits
+use that key to target the current best vault. The chosen vault address is
+then persisted to DB (monitor_wallets.deposited_kamino_vault) by
+DepositToKamino so that subsequent withdrawals always target the vault
+where funds actually are, regardless of how the analyzer's recommendation
+has rotated since the deposit.
 """
 from __future__ import annotations
 
