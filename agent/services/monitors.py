@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import agent.engines as engines
 import agent.store as store
+from agent.pretty_logging import print_monitors_box, print_signals_box, qprint
 
 
 def render_active_monitors() -> str:
@@ -87,3 +88,52 @@ def render_recent_signals(monitor_id: str | None, limit: int = 5) -> str:
             lines.append(f"  Kamino  : {kam_apy:.2f}% APY | TVL ${tvl:,.0f}{vol_tag}")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+# ── Direct display (bypasses qprint — renders styled boxes) ──────────────────
+
+def display_active_monitors() -> None:
+    """Print a styled box listing all active monitors."""
+    monitors = store.list_monitors()
+    print_monitors_box([
+        {
+            "id": m.id,
+            "type": m.type,
+            "token": getattr(m.scope, "token_symbol", "?"),
+            "poll_interval": m.poll_interval,
+            "status": m.status.value,
+            "funding": engines.wallet.get_funding_address(m.id),
+        }
+        for m in monitors
+    ])
+
+
+def display_recent_signals(monitor_id: str | None, limit: int = 5) -> None:
+    """Print a styled signals box for the given monitor."""
+    limit = max(1, min(limit, 20))
+
+    if not monitor_id:
+        all_monitors = store.list_monitors()
+        if not all_monitors:
+            qprint("No monitors running. Start one first.")
+            return
+        monitor_id = all_monitors[-1].id
+
+    if store.get_monitor(monitor_id) is None:
+        qprint(f"No active monitor found with ID '{monitor_id}'.")
+        return
+
+    signals = store.get_signals(monitor_id, limit)
+    print_signals_box(monitor_id, [
+        {
+            "timestamp": s.timestamp.strftime("%H:%M:%S"),
+            "signal":    s.signal,
+            "reason":    s.reason,
+            "jupiter_apy":    s.metadata.get("jupiter_apy_pct"),
+            "kamino_apy":     s.metadata.get("kamino_apy_pct"),
+            "jupiter_tvl":    s.metadata.get("jupiter_tvl_usd", 0),
+            "kamino_tvl":     s.metadata.get("kamino_tvl_usd", 0),
+            "kamino_volatile": s.metadata.get("kamino_yield_volatile", False),
+        }
+        for s in reversed(signals)
+    ])

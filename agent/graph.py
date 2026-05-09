@@ -13,6 +13,7 @@ from typing_extensions import NotRequired, TypedDict
 
 import agent.engines as engines
 from agent.llm import llm
+from agent.pretty_logging import err, ok, print_monitor_box, qprint, sysmsg, warn
 from agent.services import monitors as monitor_services
 from agent.services.deposit_earn import launch_deposit_earn_monitor
 from agent.tools import tools
@@ -145,8 +146,8 @@ def intent_router(state: State) -> dict:
     text = last.content
 
     if _INTENT_LIST.search(text):
-        reply = monitor_services.render_active_monitors()
-        return {"messages": [AIMessage(content=reply)], "pending_action": None}
+        monitor_services.display_active_monitors()
+        return {"messages": [AIMessage(content="")], "pending_action": None}
 
     if _INTENT_STOP.search(text):
         m = _UUID_RE.search(text)
@@ -155,8 +156,8 @@ def intent_router(state: State) -> dict:
 
     if _INTENT_SIGNALS.search(text):
         m = _UUID_RE.search(text)
-        reply = monitor_services.render_recent_signals(m.group() if m else None)
-        return {"messages": [AIMessage(content=reply)], "pending_action": None}
+        monitor_services.display_recent_signals(m.group() if m else None)
+        return {"messages": [AIMessage(content="")], "pending_action": None}
 
     if _INTENT_DEPOSIT_EARN.search(text):
         return {"pending_action": "deposit_earn_setup"}
@@ -174,8 +175,10 @@ async def _ensure_holding_address() -> str | None:
     if engines.wallet.has_holding_address():
         return engines.wallet.get_holding_address()
 
-    print("\nQVAC: Before we set up a monitor, I need your main (holding) wallet address.")
-    print("This is where funds will be returned via Umbra when monitors close.\n")
+    qprint(
+        "Before we set up a monitor, I need your main (holding) wallet address.\n"
+        "This is where funds will be returned via Umbra when monitors close."
+    )
 
     while True:
         try:
@@ -186,10 +189,11 @@ async def _ensure_holding_address() -> str | None:
         try:
             engines.wallet.set_holding_address(raw)
         except ValueError as e:
-            print(f"  Invalid: {e}. Try again or Ctrl-C to cancel.\n")
+            warn(f"Invalid: {e}. Try again or Ctrl-C to cancel.")
             continue
         addr = engines.wallet.get_holding_address()
-        print(f"  Saved: {addr}\n")
+        ok(f"Saved: {addr}")
+        print()
         return addr
 
 
@@ -207,7 +211,7 @@ async def deposit_earn_setup(state: State) -> dict:
             "pending_action": None,
         }
 
-    print("\nQVAC: Let's set up your Deposit Earn monitor.")
+    qprint("Let's set up your Deposit Earn monitor.")
 
     try:
         token = await asyncio.to_thread(select_token)
@@ -217,7 +221,8 @@ async def deposit_earn_setup(state: State) -> dict:
             "pending_action": None,
         }
 
-    print("\nJupiter API key (from beta.jup.ag/api — required for executor actions):")
+    print()
+    sysmsg("Jupiter API key (from beta.jup.ag/api — required for executor actions):")
     try:
         jup_api_key = (await asyncio.to_thread(input, "  Key: ")).strip() or None
     except (EOFError, KeyboardInterrupt):
@@ -226,7 +231,8 @@ async def deposit_earn_setup(state: State) -> dict:
             "pending_action": None,
         }
     if not jup_api_key:
-        print("  Warning: no API key set — polling will be unauthenticated and executor actions will abort.\n")
+        warn("No API key set — polling will be unauthenticated and executor actions will abort.")
+        print()
 
     result = launch_deposit_earn_monitor(
         token_symbol=token["symbol"],
@@ -234,21 +240,15 @@ async def deposit_earn_setup(state: State) -> dict:
         jup_api_key=jup_api_key,
     )
 
-    return {
-        "messages": [AIMessage(content=(
-            f"Deposit Earn monitor started for {token['symbol']}!\n\n"
-            f"  ID         : {result.monitor.id}\n"
-            f"  Token      : {token['symbol']} ({token['mint'][:8]}…)\n"
-            f"  Protocols  : Jupiter Lend + Kamino KVaults\n"
-            f"  Interval   : every {result.monitor.poll_interval}s\n"
-            f"  Funding    : {result.funding_address}\n"
-            f"  Returns to : {holding_addr}\n\n"
-            f"Send funds to the funding address to begin operations.\n"
-            f"Say 'get signals' to check the latest APY recommendation.\n"
-            f"Say 'list active monitors' to see all running monitors."
-        ))],
-        "pending_action": None,
-    }
+    print_monitor_box(
+        monitor_id=result.monitor.id,
+        token_symbol=token["symbol"],
+        token_mint=token["mint"],
+        poll_interval=result.monitor.poll_interval,
+        funding_address=result.funding_address,
+        holding_addr=holding_addr,
+    )
+    return {"messages": [AIMessage(content="")], "pending_action": None}
 
 
 _MAX_HISTORY = 20  # keep last N messages to stay within local model context limit
