@@ -158,17 +158,11 @@ class UmbraClient:
     # ------------------------------------------------------------------
 
     async def user_add(self, name: str, *, keypair_path: str) -> None:
-        """
-        Add a signer user backed by a local Solana keypair file.
-
-        Assumed flag: `--keypair <path>` for the local backend. If
-        `umbra user add --help` shows a different flag (e.g. `--path`),
-        update this call site accordingly.
-        """
+        """Add a signer user backed by a local Solana keypair file."""
         await self._run(
             "user", "add", name,
             "--backend", "local",
-            "--keypair", keypair_path,
+            "--param", f"keypair={keypair_path}",
         )
 
     async def user_use(self, name: str) -> None:
