@@ -201,7 +201,7 @@ class BaseExecutor(ABC):
     """Routes a Decision to whatever should happen next for its monitor type."""
 
     @abstractmethod
-    async def handle(self, decision: Decision) -> None: ...
+    async def handle(self, decision: Decision) -> ChainResult | None: ...
 
     def restore_cooldown(self, monitor_id: str) -> None:
         """Reconstruct in-memory cooldown state from persistent storage.
@@ -224,10 +224,10 @@ class ChainBasedExecutor(BaseExecutor):
         self._chains = chains
         self._dry_run = dry_run
 
-    async def handle(self, decision: Decision) -> None:
+    async def handle(self, decision: Decision) -> ChainResult | None:
         chain = self._chains.get(decision.signal)
         if chain is None:
-            return
+            return None
 
         ctx = ActionContext(decision=decision, dry_run=self._dry_run)
 
@@ -249,3 +249,5 @@ class ChainBasedExecutor(BaseExecutor):
                 error=result.error,
                 state=ctx.state,
             )
+
+        return result

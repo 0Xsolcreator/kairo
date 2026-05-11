@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 import agent.db as db
 from agent.analyzer.base import Decision
-from agent.executor.base import BaseExecutor
+from agent.executor.base import BaseExecutor, ChainResult
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class DebouncedExecutor(BaseExecutor):
                 monitor_id, elapsed, self._cooldown_seconds,
             )
 
-    async def handle(self, decision: Decision) -> None:
+    async def handle(self, decision: Decision) -> ChainResult | None:
         mid = decision.monitor_id
         sig = decision.signal
 
@@ -105,8 +105,12 @@ class DebouncedExecutor(BaseExecutor):
             )
             return
 
-        # Pass through
-        self._last_run[mid] = now
-        # Reset streak so the next chain requires another N consecutive signals.
+        # Pass through — reset streak so next chain needs N fresh signals.
         self._streak.pop(mid, None)
-        await self._inner.handle(decision)
+        result = await self._inner.handle(decision)
+        # Only lock in the cooldown when the chain fully completed.
+        # Aborted (no funds) and failed chains moved nothing on-chain,
+        # so there is no ping-pong risk and we should retry promptly.
+        if result is not None and result.status == "completed":
+            self._last_run[mid] = now
+        return result
