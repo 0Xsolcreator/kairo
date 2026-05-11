@@ -18,3 +18,6 @@ skills-lock.json
 # Docs
 USAGE.md
 POLLING.md
+
+# Logs
+*.log
