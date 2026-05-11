@@ -15,26 +15,23 @@ duplicating it in agent config invites two-source-of-truth bugs.
 
 Concurrency
 -----------
-The CLI keeps an "active user" as process-global state, set with
-`umbra user use <name>`. To avoid two concurrent chains clobbering
-each other's active user, every command run goes through a single
-module-level `asyncio.Lock` — slower but correct.
-
-If you confirm the CLI accepts a per-call `--user <name>` flag,
-drop the lock and inject the flag in `_run` instead.
+v0.2.5+ supports a --user <name> flag on all ETA and register commands.
+Each call carries its own user context, so commands can run concurrently
+without a shared lock or global active-user state. The old _CLI_LOCK /
+user_use serialization pattern is no longer needed.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import re
 import shutil
 from typing import Sequence
 
-logger = logging.getLogger(__name__)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
-# Single global lock guarding every umbra invocation. See module docstring.
-_CLI_LOCK = asyncio.Lock()
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +84,7 @@ def _parse_eta_balance_output(output: str) -> int:
     balance for this mint." If the CLI ever emits an explicit "no balance"
     text line, this still does the right thing because it parses to 0.
     """
-    for line in output.splitlines():
+    for line in _ANSI_RE.sub("", output).splitlines():
         tokens = line.strip().split()
         if not tokens:
             continue
@@ -108,8 +105,7 @@ def _parse_eta_balance_output(output: str) -> int:
 class UmbraClient:
     """
     One instance is fine for the whole agent — there's no per-instance state
-    other than the cached "binary verified" flag, and the active-user lock
-    is module-level anyway.
+    other than the cached "binary verified" flag.
     """
 
     def __init__(self, binary: str | None = None) -> None:
@@ -136,22 +132,32 @@ class UmbraClient:
     # ------------------------------------------------------------------
 
     async def _run(self, *args: str) -> str:
-        """Run `umbra <args>` under the global lock. Returns stdout."""
+        """Run `umbra <args>`. Returns stdout."""
         self.ensure_installed()
-        async with _CLI_LOCK:
-            logger.debug("umbra %s", " ".join(args))
-            proc = await asyncio.create_subprocess_exec(
-                self._binary,
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+        timeout = float(os.environ.get("QVAC_UMBRA_TIMEOUT_S", "120"))
+        logger.debug("umbra %s", " ".join(args))
+        proc = await asyncio.create_subprocess_exec(
+            self._binary,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
             )
-            stdout_b, stderr_b = await proc.communicate()
-            stdout = stdout_b.decode("utf-8", errors="replace")
-            stderr = stderr_b.decode("utf-8", errors="replace")
-            if proc.returncode != 0:
-                raise UmbraCommandFailed(args, proc.returncode or -1, stdout, stderr)
-            return stdout
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise UmbraCommandFailed(
+                args, -1, "",
+                f"timed out after {timeout:.0f}s — try setting QVAC_UMBRA_TIMEOUT_S",
+            )
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise UmbraCommandFailed(args, proc.returncode or -1, stdout, stderr)
+        return stdout
 
     # ------------------------------------------------------------------
     # Users
@@ -166,6 +172,7 @@ class UmbraClient:
         )
 
     async def user_use(self, name: str) -> None:
+        """Set the global active user. Prefer passing --user where supported."""
         await self._run("user", "use", name)
 
     async def user_list_raw(self) -> str:
@@ -173,13 +180,6 @@ class UmbraClient:
         return await self._run("user", "list")
 
     async def user_exists(self, name: str) -> bool:
-        """
-        Best-effort existence check by scanning `user list` output.
-
-        The CLI's exact format isn't documented here — we look for a line
-        whose first whitespace-delimited token equals `name`. Adjust if the
-        list output is decorated (TTY colors, table borders, etc.).
-        """
         output = await self.user_list_raw()
         for line in output.splitlines():
             tokens = line.strip().split()
@@ -191,37 +191,44 @@ class UmbraClient:
     # Identity
     # ------------------------------------------------------------------
 
-    async def register(self) -> None:
+    async def register(
+        self,
+        *,
+        user: str | None = None,
+        confidential: bool = True,
+    ) -> None:
         """
-        Publish the on-chain Umbra account for the active user.
+        Publish the on-chain Umbra account for the given user.
 
-        Re-runs are intended to be safe per the SDK docs (it handles key
-        rotation), but each call submits an on-chain tx with SOL cost,
-        so callers should gate with a "is registered?" check if they
-        can determine it cheaply.
+        `confidential=True` (default) registers the X25519 key required for
+        shared-mode encrypted balances — without it, `eta withdraw` fails
+        preflight because no shared-mode account exists on-chain.
+        Pass `user` to target a specific user without changing the active user.
         """
-        await self._run("register")
+        args = ["register"]
+        if confidential:
+            args += ["--confidential"]
+        if user:
+            args += ["--user", user]
+        await self._run(*args)
 
     # ------------------------------------------------------------------
     # Encrypted token account (ETA)
     # ------------------------------------------------------------------
 
-    async def eta_balance_raw(self, mint: str) -> str:
-        """Returns raw stdout from `umbra eta balance <mint>` (single-mint query)."""
-        return (await self._run("eta", "balance", mint)).strip()
+    async def eta_balance_raw(self, mint: str, *, user: str | None = None) -> str:
+        """Returns raw stdout from `umbra eta balance <mint>`."""
+        args = ["eta", "balance", mint]
+        if user:
+            args += ["--user", user]
+        return (await self._run(*args)).strip()
 
-    async def eta_balance(self, mint: str) -> int:
+    async def eta_balance(self, mint: str, *, user: str | None = None) -> int:
         """
-        Return the active user's encrypted balance for `mint` in base units.
-
-        Returns 0 if the CLI output contains no numeric balance row — that's
-        treated as "no encrypted balance for this mint" rather than an error.
-
-        Caller passes a single mint, so the CLI emits exactly one data row
-        on success. If we ever pass `--all` or multiple mints, swap to a
-        dict-returning variant.
+        Return the encrypted balance for `mint` in base units.
+        Returns 0 if the CLI output contains no numeric balance row.
         """
-        return _parse_eta_balance_output(await self.eta_balance_raw(mint))
+        return _parse_eta_balance_output(await self.eta_balance_raw(mint, user=user))
 
     async def eta_deposit(
         self,
@@ -229,21 +236,58 @@ class UmbraClient:
         amount: int,
         *,
         recipient: str | None = None,
+        user: str | None = None,
     ) -> None:
         """
-        Move `amount` (base units) of `mint` from the active user's public
-        wallet into an encrypted ETA.
+        Move `amount` (base units) of `mint` from the user's public wallet
+        into an encrypted ETA.
 
-        Defaults to depositing into the active user's own encrypted balance.
-        Pass `recipient` (a Solana pubkey) to deposit directly into someone
-        else's encrypted ETA — used by the close-flow to shield funds back
-        to the user's holding wallet without an intermediate step.
+        Pass `recipient` to deposit into someone else's encrypted ETA.
+        Pass `user` to act as a specific user without changing the active user.
         """
         args = ["eta", "deposit", mint, str(amount)]
         if recipient:
             args += ["--recipient", recipient]
+        if user:
+            args += ["--user", user]
         await self._run(*args)
 
-    async def eta_withdraw(self, mint: str, amount: int) -> None:
-        """Move `amount` (base units) of `mint` from encrypted → public balance."""
-        await self._run("eta", "withdraw", mint, str(amount))
+    async def eta_convert(
+        self,
+        mint: str | None = None,
+        *,
+        all_tokens: bool = False,
+        user: str | None = None,
+    ) -> None:
+        """
+        Convert MXE-encrypted ETA balance(s) to shared mode so they can be
+        read by eta_balance and withdrawn via eta_withdraw.
+
+        Pass a specific `mint` address, or set `all_tokens=True` to convert
+        every token supported by the relayer.
+        Pass `user` to act as a specific user without changing the active user.
+        """
+        args = ["eta", "convert"]
+        if all_tokens:
+            args += ["--all"]
+        elif mint:
+            args += [mint]
+        if user:
+            args += ["--user", user]
+        await self._run(*args)
+
+    async def eta_withdraw(
+        self,
+        mint: str,
+        amount: int,
+        *,
+        user: str | None = None,
+    ) -> None:
+        """
+        Move `amount` (base units) of `mint` from encrypted → public balance.
+        Pass `user` to act as a specific user without changing the active user.
+        """
+        args = ["eta", "withdraw", mint, str(amount)]
+        if user:
+            args += ["--user", user]
+        await self._run(*args)
