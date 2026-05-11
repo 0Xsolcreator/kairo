@@ -16,6 +16,7 @@ from agent.llm import llm
 from agent.pretty_logging import err, ok, print_monitor_box, qprint, sysmsg, warn
 from agent.services import monitors as monitor_services
 from agent.services.deposit_earn import launch_deposit_earn_monitor
+from agent.services.fund_monitor import run_fund_monitor_flow
 from agent.tools import tools
 from agent.tools.monitors import MONITOR_CATALOGUE, catalogue_text
 
@@ -109,6 +110,14 @@ _INTENT_MONITOR_SETUP = _re.compile(
     r"|\bi\s+want\s+(a\s+)?monitor\b",
     _re.I,
 )
+_INTENT_FUND_MONITOR = _re.compile(
+    r"\b(fund|top[\s-]up)\b.{0,30}\bmonitor\b"
+    r"|\bmonitor\b.{0,30}\b(fund|top[\s-]up)\b"
+    r"|\bdeposit\b.{0,20}\b(monitor|funding\s+wallet)\b"
+    r"|\bfund\s+(the\s+|my\s+)?(monitor|funding\s+wallet)\b"
+    r"|\btransfer\b.{0,20}\bfunding\s+wallet\b",
+    _re.I,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +180,9 @@ def intent_router(state: State) -> dict:
     if _INTENT_MONITOR_SETUP.search(text):
         return {"pending_action": "monitor_type_picker"}
 
+    if _INTENT_FUND_MONITOR.search(text):
+        return {"pending_action": "fund_monitor_flow"}
+
     return {}
 
 
@@ -204,6 +216,12 @@ async def _ensure_holding_address() -> str | None:
         ok(f"Saved: {addr}")
         print()
         return addr
+
+
+async def fund_monitor_flow(_state: State) -> dict:
+    """Interactive flow to fund a monitor wallet via Umbra ETA deposit."""
+    reply = await run_fund_monitor_flow()
+    return {"messages": [AIMessage(content=reply)], "pending_action": None}
 
 
 async def monitor_type_picker(_state: State) -> dict:
@@ -309,6 +327,8 @@ def after_intent_router(state: State) -> str:
         return "deposit_earn_setup"
     if action == "monitor_type_picker":
         return "monitor_type_picker"
+    if action == "fund_monitor_flow":
+        return "fund_monitor_flow"
     if isinstance(state["messages"][-1], AIMessage):
         return END
     return "agent"
@@ -339,6 +359,7 @@ def make_graph(checkpointer: BaseCheckpointSaver):
     builder.add_node("intent_router",       intent_router)
     builder.add_node("monitor_type_picker", monitor_type_picker)
     builder.add_node("deposit_earn_setup",  deposit_earn_setup)
+    builder.add_node("fund_monitor_flow",   fund_monitor_flow)
     builder.add_node("agent",               call_model)
     builder.add_node("tools",               ToolNode(tools))
 
@@ -348,6 +369,7 @@ def make_graph(checkpointer: BaseCheckpointSaver):
     builder.add_conditional_edges("monitor_type_picker", after_monitor_type_picker)
     builder.add_conditional_edges("agent",               after_agent)
     builder.add_edge("deposit_earn_setup", END)
+    builder.add_edge("fund_monitor_flow",  END)
     builder.add_edge("tools",              "agent")
 
     return builder.compile(checkpointer=checkpointer)
