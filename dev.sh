@@ -3,6 +3,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Load .env if it exists
+if [ -f .env ]; then
+    set -o allexport
+    # shellcheck source=.env
+    source .env
+    set +o allexport
+fi
+
 LOG=qvac-server.log
 
 # Start the model server, redirecting all output to a log file.
