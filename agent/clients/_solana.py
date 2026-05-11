@@ -2,13 +2,15 @@
 Shared Solana transaction signing and RPC submission helpers.
 
 Used by KaminoClient and JupiterClient — neither depends on `solders`.
-The only crypto dependency is PyNaCl for ed25519 signing.
+The only crypto dependencies are PyNaCl for ed25519 signing and
+bip_utils for base58 decoding (blockhash only; pubkeys are passed as bytes).
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import logging
+import struct
 import time
 
 import httpx
@@ -161,6 +163,103 @@ async def get_spl_token_balance(
             except ValueError:
                 pass
         return total
+
+
+async def get_sol_balance(rpc_url: str, pubkey: str) -> int:
+    """Return the SOL balance of `pubkey` in lamports."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            rpc_url,
+            json={
+                "jsonrpc": "2.0", "id": 1,
+                "method": "getBalance",
+                "params": [pubkey, {"commitment": "confirmed"}],
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if "error" in body:
+            raise RuntimeError(f"getBalance failed: {body['error']}")
+        return body["result"]["value"]
+
+
+def _build_sol_transfer_tx(
+    from_pubkey: bytes,
+    to_pubkey: bytes,
+    lamports: int,
+    blockhash: bytes,
+) -> str:
+    """
+    Build an unsigned legacy SOL transfer transaction. Returns base64.
+
+    Layout:
+      [01]           signature count = 1
+      [64 × 00]      signature placeholder
+      --- message ---
+      [01 00 01]     header: 1 signer, 0 readonly-signed, 1 readonly-unsigned
+      [03]           compact-u16: 3 account keys
+      [32]           from_pubkey  (writable signer,   index 0)
+      [32]           to_pubkey    (writable non-signer, index 1)
+      [32]           SystemProgram (readonly,           index 2) = all-zeros
+      [32]           recent blockhash
+      [01]           compact-u16: 1 instruction
+      [02]           program_id_index = 2 (SystemProgram)
+      [02 00 01]     2 account indices: from=0, to=1
+      [0c]           data length = 12
+      [02 00 00 00]  SystemProgram::Transfer type
+      [8 bytes LE]   lamports
+    """
+    ix_data = struct.pack("<I", 2) + struct.pack("<Q", lamports)
+    message = (
+        b"\x01\x00\x01"           # header
+        + b"\x03"                 # 3 account keys
+        + from_pubkey
+        + to_pubkey
+        + bytes(32)               # SystemProgram (all zeros)
+        + blockhash
+        + b"\x01"                 # 1 instruction
+        + b"\x02"                 # program_id_index = SystemProgram
+        + b"\x02\x00\x01"         # 2 account indices: from=0, to=1
+        + b"\x0c"                 # data length = 12
+        + ix_data
+    )
+    return base64.b64encode(b"\x01" + bytes(64) + message).decode()
+
+
+async def transfer_sol(
+    from_private_key: bytes,
+    from_pubkey: bytes,
+    to_pubkey: bytes,
+    lamports: int,
+    rpc_url: str,
+) -> str:
+    """
+    Transfer `lamports` from `from_pubkey` to `to_pubkey`. Returns tx signature.
+
+    `from_private_key` and both pubkeys are raw 32-byte ed25519 material.
+    """
+    from bip_utils import Base58Decoder
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            rpc_url,
+            json={
+                "jsonrpc": "2.0", "id": 1,
+                "method": "getLatestBlockhash",
+                "params": [{"commitment": "confirmed"}],
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if "error" in body:
+            raise RuntimeError(f"getLatestBlockhash failed: {body['error']}")
+        blockhash_bytes = Base58Decoder.Decode(body["result"]["value"]["blockhash"])
+
+    unsigned_tx = _build_sol_transfer_tx(from_pubkey, to_pubkey, lamports, blockhash_bytes)
+    signed_tx   = sign_transaction(unsigned_tx, from_private_key)
+    return await send_and_confirm(signed_tx, rpc_url)
 
 
 async def _send_with_retry(
