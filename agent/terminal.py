@@ -43,6 +43,40 @@ def _clear(n_lines: int) -> None:
     print(f"\033[{n_lines}A\033[J", end="", flush=True)
 
 
+def _render_list(title: str, items: list[str], selected: int) -> None:
+    print(f"\n  {title} (↑↓ arrows, Enter to confirm, q to cancel):\n")
+    for i, item in enumerate(items):
+        cursor = "▶" if i == selected else " "
+        print(f"    {cursor} {item}")
+    print()
+
+
+def select_from_list(title: str, items: list[str]) -> str:
+    """
+    Generic blocking arrow-key picker. Returns the selected item string.
+    Raises KeyboardInterrupt if the user presses Ctrl-C or q.
+    """
+    selected = 0
+    total_lines = len(items) + 4
+
+    _render_list(title, items, selected)
+
+    while True:
+        key = _read_key()
+        if key in ("\r", "\n"):
+            _clear(total_lines)
+            return items[selected]
+        elif key == _UP:
+            selected = (selected - 1) % len(items)
+        elif key == _DOWN:
+            selected = (selected + 1) % len(items)
+        elif key in ("\x03", "q"):
+            _clear(total_lines)
+            raise KeyboardInterrupt
+        _clear(total_lines)
+        _render_list(title, items, selected)
+
+
 def _render_monitor_types(names: list[str], selected: int) -> None:
     print("\n  Select a monitor type (↑↓ arrows, Enter to confirm, q to cancel):\n")
     for i, name in enumerate(names):
