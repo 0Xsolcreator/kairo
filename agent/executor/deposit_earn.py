@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from agent.analyzer.deposit_earn import Signal
 from agent.executor.actions import (
+    ConvertMxeBalance,
     DepositToJupiter,
     DepositToKamino,
     EnsureUmbraUser,
@@ -58,6 +59,7 @@ from agent.executor.actions import (
     LoadKaminoUnderlyingBalance,
     RequireMinimum,
     SeedFromEncrypted,
+    TopUpOperatingWallet,
     WithdrawFromJupiter,
     WithdrawFromKamino,
 )
@@ -80,7 +82,9 @@ class DepositEarnExecutor(ChainBasedExecutor):
                 # aborts there but any pre-existing ATA balance is still
                 # picked up if the stub is removed.
                 Signal.JUPITER: ActionChain(actions=[
+                    TopUpOperatingWallet(),                                   # SOL for fees must land before umbra register
                     EnsureUmbraUser(),
+                    ConvertMxeBalance(),                                      # MXE → shared so eta balance/withdraw can see funds
                     SeedFromEncrypted(into_key="encrypted_seed"),            # Umbra → ATA
                     LoadKaminoUnderlyingBalance(into_key="kamino_amount"),
                     WithdrawFromKamino(amount_key="kamino_amount", skip_if_zero=True),  # Kamino → ATA
@@ -99,7 +103,9 @@ class DepositEarnExecutor(ChainBasedExecutor):
                 # total. Handles stuck funds, direct deposits, and rebalances
                 # in one sweep.
                 Signal.KAMINO: ActionChain(actions=[
+                    TopUpOperatingWallet(),                                   # SOL for fees must land before umbra register
                     EnsureUmbraUser(),
+                    ConvertMxeBalance(),                                      # MXE → shared so eta balance/withdraw can see funds
                     SeedFromEncrypted(into_key="encrypted_seed"),            # Umbra → ATA
                     LoadJupiterPosition(into_key="jupiter_amount"),
                     WithdrawFromJupiter(amount_key="jupiter_amount", skip_if_zero=True),  # Jupiter → ATA
