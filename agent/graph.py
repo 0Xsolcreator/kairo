@@ -17,7 +17,7 @@ from agent.pretty_logging import err, ok, print_monitor_box, qprint, sysmsg, war
 from agent.services import monitors as monitor_services
 from agent.services.deposit_earn import launch_deposit_earn_monitor
 from agent.tools import tools
-from agent.tools.monitors import catalogue_text
+from agent.tools.monitors import MONITOR_CATALOGUE, catalogue_text
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -103,6 +103,12 @@ _INTENT_DEPOSIT_EARN = _re.compile(
     r"|\bmonitor\b.{0,25}\b(earnings?|deposit|yield|apy)\b",
     _re.I,
 )
+_INTENT_MONITOR_SETUP = _re.compile(
+    r"\b(start|setup|set\s+up|create|new|add|launch)\b.{0,20}\bmonitor\b"
+    r"|\bmonitor\b.{0,20}\b(setup|start|create|new|add|launch)\b"
+    r"|\bi\s+want\s+(a\s+)?monitor\b",
+    _re.I,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +168,9 @@ def intent_router(state: State) -> dict:
     if _INTENT_DEPOSIT_EARN.search(text):
         return {"pending_action": "deposit_earn_setup"}
 
+    if _INTENT_MONITOR_SETUP.search(text):
+        return {"pending_action": "monitor_type_picker"}
+
     return {}
 
 
@@ -195,6 +204,21 @@ async def _ensure_holding_address() -> str | None:
         ok(f"Saved: {addr}")
         print()
         return addr
+
+
+async def monitor_type_picker(_state: State) -> dict:
+    """Shows an interactive monitor-type menu and sets pending_action to the chosen setup."""
+    from agent.terminal import select_monitor_type
+
+    names = list(MONITOR_CATALOGUE.keys())
+    try:
+        chosen = await asyncio.to_thread(select_monitor_type, names)
+    except KeyboardInterrupt:
+        return {
+            "messages": [AIMessage(content="Monitor setup cancelled.")],
+            "pending_action": None,
+        }
+    return {"pending_action": f"{chosen}_setup"}
 
 
 async def deposit_earn_setup(state: State) -> dict:
@@ -280,11 +304,21 @@ def after_guardrail(state: State) -> str:
 
 
 def after_intent_router(state: State) -> str:
-    if state.get("pending_action") == "deposit_earn_setup":
+    action = state.get("pending_action")
+    if action == "deposit_earn_setup":
         return "deposit_earn_setup"
+    if action == "monitor_type_picker":
+        return "monitor_type_picker"
     if isinstance(state["messages"][-1], AIMessage):
         return END
     return "agent"
+
+
+def after_monitor_type_picker(state: State) -> str:
+    action = state.get("pending_action")
+    if action == "deposit_earn_setup":
+        return "deposit_earn_setup"
+    return END
 
 
 def after_agent(state: State) -> str:
@@ -301,16 +335,18 @@ def after_agent(state: State) -> str:
 def make_graph(checkpointer: BaseCheckpointSaver):
     builder = StateGraph(State)
 
-    builder.add_node("guardrail",          guardrail)
-    builder.add_node("intent_router",      intent_router)
-    builder.add_node("deposit_earn_setup", deposit_earn_setup)
-    builder.add_node("agent",              call_model)
-    builder.add_node("tools",              ToolNode(tools))
+    builder.add_node("guardrail",           guardrail)
+    builder.add_node("intent_router",       intent_router)
+    builder.add_node("monitor_type_picker", monitor_type_picker)
+    builder.add_node("deposit_earn_setup",  deposit_earn_setup)
+    builder.add_node("agent",               call_model)
+    builder.add_node("tools",               ToolNode(tools))
 
     builder.set_entry_point("guardrail")
-    builder.add_conditional_edges("guardrail",     after_guardrail)
-    builder.add_conditional_edges("intent_router", after_intent_router)
-    builder.add_conditional_edges("agent",         after_agent)
+    builder.add_conditional_edges("guardrail",           after_guardrail)
+    builder.add_conditional_edges("intent_router",       after_intent_router)
+    builder.add_conditional_edges("monitor_type_picker", after_monitor_type_picker)
+    builder.add_conditional_edges("agent",               after_agent)
     builder.add_edge("deposit_earn_setup", END)
     builder.add_edge("tools",              "agent")
 

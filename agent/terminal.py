@@ -43,6 +43,43 @@ def _clear(n_lines: int) -> None:
     print(f"\033[{n_lines}A\033[J", end="", flush=True)
 
 
+def _render_monitor_types(names: list[str], selected: int) -> None:
+    print("\n  Select a monitor type (↑↓ arrows, Enter to confirm, q to cancel):\n")
+    for i, name in enumerate(names):
+        cursor = "▶" if i == selected else " "
+        print(f"    {cursor} {name}")
+    print(f"      · more coming soon")
+    print()
+
+
+def select_monitor_type(names: list[str]) -> str:
+    """
+    Blocking interactive monitor-type selector. Returns the chosen monitor name.
+    Raises KeyboardInterrupt if the user presses Ctrl-C or q.
+    """
+    selected = 0
+    total_lines = len(names) + 5  # +1 for "more coming soon" line
+
+    _render_monitor_types(names, selected)
+
+    while True:
+        key = _read_key()
+
+        if key in ("\r", "\n"):
+            _clear(total_lines)
+            return names[selected]
+        elif key == _UP:
+            selected = (selected - 1) % len(names)
+        elif key == _DOWN:
+            selected = (selected + 1) % len(names)
+        elif key in ("\x03", "q"):
+            _clear(total_lines)
+            raise KeyboardInterrupt
+
+        _clear(total_lines)
+        _render_monitor_types(names, selected)
+
+
 def select_token() -> dict[str, str]:
     """
     Blocking interactive token selector. Returns {"symbol": ..., "mint": ...}.

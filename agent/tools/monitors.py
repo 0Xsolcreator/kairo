@@ -5,7 +5,7 @@ from langchain_core.tools import tool
 from agent.schemas.monitor import SUPPORTED_TOKENS
 from agent.services import monitors as monitor_services
 
-_MONITOR_CATALOGUE: dict[str, dict] = {
+MONITOR_CATALOGUE: dict[str, dict] = {
     "deposit_earn": {
         "description": (
             "Monitors deposit APY across Jupiter Lend and Kamino KVaults "
@@ -27,7 +27,7 @@ _MONITOR_CATALOGUE: dict[str, dict] = {
 def catalogue_text() -> str:
     """Return a plain-text summary embedded in the system prompt."""
     lines: list[str] = []
-    for name, info in _MONITOR_CATALOGUE.items():
+    for name, info in MONITOR_CATALOGUE.items():
         lines.append(f"Monitor type: {name}")
         lines.append(f"  Description : {info['description']}")
         lines.append(f"  Tokens      : {', '.join(info['tokens'])}")
@@ -48,7 +48,7 @@ def catalogue_text() -> str:
 def list_monitor_types() -> str:
     """Show available monitor types and what they track."""
     lines = ["Available monitor types:\n"]
-    for name, info in _MONITOR_CATALOGUE.items():
+    for name, info in MONITOR_CATALOGUE.items():
         lines.append(f"**{name}**")
         lines.append(f"  {info['description']}")
         lines.append(f"  Tokens   : {', '.join(info['tokens'])}")
