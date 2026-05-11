@@ -137,8 +137,7 @@ class EnsureUmbraUser(Action):
             return
 
         if await _client.user_exists(user_name):
-            await _client.user_use(user_name)
-            return
+            return  # already registered — ctx.state["first_registration"] stays unset
 
         keypair = wallet.get_operating_keypair(mid)
         if keypair is None:
@@ -153,12 +152,34 @@ class EnsureUmbraUser(Action):
 
         try:
             await _client.user_add(user_name, keypair_path=str(keypair_path))
-            await _client.user_use(user_name)
-            await _client.register()
+            await _client.register(user=user_name)
         except UmbraCommandFailed as e:
-            # Surface the CLI's stderr verbatim — debugging Umbra issues
-            # without it is miserable.
             raise ChainAbort(f"umbra setup failed: {e}") from e
+
+
+class ConvertMxeBalance(Action):
+    """
+    Convert any MXE-encrypted ETA balance to shared mode for the monitor's token.
+
+    Cross-user `umbra eta deposit --recipient` always lands as MXE balance
+    regardless of whether the recipient is registered. `eta withdraw` silently
+    no-ops on MXE balance (no on-chain tx, no error). Running `eta convert`
+    before every `SeedFromEncrypted` ensures the balance is in shared mode and
+    withdrawable. The command is a fast no-op when there is nothing to convert.
+
+    Must run after EnsureUmbraUser and before SeedFromEncrypted.
+    """
+
+    async def run(self, ctx: ActionContext) -> None:
+        mint = _resolve_token_mint(ctx)
+        user = ctx.state.get("umbra_user")
+        if ctx.dry_run:
+            logger.info("[dry_run] would eta convert %s --user %s", mint, user)
+            return
+        try:
+            await _client.eta_convert(mint, user=user)
+        except UmbraCommandFailed as e:
+            raise ChainAbort(f"eta convert failed: {e}") from e
 
 
 class ReadEncryptedBalance(Action):
@@ -176,7 +197,7 @@ class ReadEncryptedBalance(Action):
 
     async def run(self, ctx: ActionContext) -> None:
         mint = _resolve_token_mint(ctx)
-        ctx.state[self._into_key] = await _client.eta_balance(mint)
+        ctx.state[self._into_key] = await _client.eta_balance(mint, user=ctx.state.get("umbra_user"))
 
 
 class WithdrawFromEncrypted(Action):
@@ -198,7 +219,7 @@ class WithdrawFromEncrypted(Action):
             logger.info("[dry_run] would eta withdraw %d of %s", amount, mint)
             return
         try:
-            await _client.eta_withdraw(mint, amount)
+            await _client.eta_withdraw(mint, amount, user=ctx.state.get("umbra_user"))
         except UmbraCommandFailed as e:
             raise ChainAbort(f"eta withdraw failed: {e}") from e
 
@@ -222,7 +243,7 @@ class DepositToEncrypted(Action):
             logger.info("[dry_run] would eta deposit %d of %s", amount, mint)
             return
         try:
-            await _client.eta_deposit(mint, amount)
+            await _client.eta_deposit(mint, amount, user=ctx.state.get("umbra_user"))
         except UmbraCommandFailed as e:
             raise ChainAbort(f"eta deposit failed: {e}") from e
 
@@ -253,7 +274,7 @@ class SeedFromEncrypted(Action):
 
     async def run(self, ctx: ActionContext) -> None:
         mint = _resolve_token_mint(ctx)
-        balance = await _client.eta_balance(mint)
+        balance = await _client.eta_balance(mint, user=ctx.state.get("umbra_user"))
         if balance < self._min_amount:
             ctx.state[self._into_key] = 0
             logger.debug(
@@ -266,7 +287,7 @@ class SeedFromEncrypted(Action):
             logger.info("[dry_run] would seed: eta withdraw %d of %s", balance, mint)
             return
         try:
-            await _client.eta_withdraw(mint, balance)
+            await _client.eta_withdraw(mint, balance, user=ctx.state.get("umbra_user"))
         except UmbraCommandFailed as e:
             raise ChainAbort(f"seed: eta withdraw failed: {e}") from e
 
@@ -308,6 +329,6 @@ class SendToHolding(Action):
             )
             return
         try:
-            await _client.eta_deposit(mint, amount, recipient=holding)
+            await _client.eta_deposit(mint, amount, recipient=holding, user=ctx.state.get("umbra_user"))
         except UmbraCommandFailed as e:
             raise ChainAbort(f"send-to-holding failed: {e}") from e
