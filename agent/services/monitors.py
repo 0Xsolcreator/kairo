@@ -20,7 +20,7 @@ def render_active_monitors() -> str:
     if not monitors:
         return "No monitors are currently running."
 
-    lines = [f"{len(monitors)} active monitor(s):", ""]
+    lines = [f"{len(monitors)} monitor(s):", ""]
     for m in monitors:
         sym = getattr(m.scope, "token_symbol", "?")
         funding = engines.wallet.get_funding_address(m.id)

@@ -257,7 +257,7 @@ def print_monitors_box(monitors_data: list[dict]) -> None:
         lines.append(f"  {DIM}No monitors are currently running.{R}")
     else:
         n = len(monitors_data)
-        lines.append(f"  {BOLD}{n} active monitor{'s' if n != 1 else ''}{R}")
+        lines.append(f"  {BOLD}{n} monitor{'s' if n != 1 else ''}{R}")
         for i, m in enumerate(monitors_data):
             lines.append("")
             lines.append(f"  {ACCENT}◆{R}  {DIM}{m['id']}{R}")

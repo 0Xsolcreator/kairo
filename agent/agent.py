@@ -1,6 +1,7 @@
+import re
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
@@ -17,57 +18,109 @@ from agent.services.fund_monitor import run_fund_monitor_flow
 from agent.services.monitors import display_active_monitors, render_active_monitors
 
 _MAX_HISTORY = 20
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def _recent(messages: list[BaseMessage]) -> list[BaseMessage]:
     return messages[-_MAX_HISTORY:]
 
 
-SupportedIntents = Literal["monitor", "observe", "fund", "out_of_scope"]
-SupportedMonitorIntents = Literal[
-    "start", "pause", "retrieve", "review", "out_of_scope"
-]
+def _strip_think(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
+
+
+def _extract_json(text: str) -> str:
+    """Return the first complete JSON object from text, handling nested braces."""
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return text[start:]
+
+
+async def _invoke_structured(messages: list, model_class: type[BaseModel]) -> BaseModel:
+    raw = await llm.ainvoke(messages)
+    clean = _strip_think(raw.content)
+    return model_class.model_validate_json(_extract_json(clean))
+
+
+SupportedActions = Literal["list", "start", "pause", "retrieve", "review", "fund", "out_of_scope"]
 AvailableMonitors = Literal["lending"]
 
 
 class CurrentMessageState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
-    intent: SupportedIntents
-    monitor_intent: NotRequired[SupportedMonitorIntents]
+    action: NotRequired[SupportedActions]
     monitor_type: NotRequired[AvailableMonitors]
 
 
-class ClassificationToolOutput(BaseModel):
-    intent: SupportedIntents
-    reason: str = Field(description="Why this classification; what the user asked for")
+class ActionOutput(BaseModel):
+    action: SupportedActions
+    monitor_type: AvailableMonitors | None = Field(
+        default=None,
+        description="Only relevant when action is 'start'. Null if not specified.",
+    )
+    reason: str = Field(description="Why this classification")
 
 
-CLASSIFICATION_SYSTEM_PROMPT = """You classify user requests for <your tool>.
+ACTION_SYSTEM_PROMPT = """You classify user requests for Kairo, a DeFi monitoring terminal.
 
-Supported intents (and ONLY these):
-- monitor: user wants to setup monitoring for on-chain activity
-- observe: user wants to observe on-chain activity of a setup up monitoring
-- fund: user wants to fund their monitor wallet
+Actions (choose exactly one):
+- list: user wants to show, list, view, or check all existing monitors
+- start: user wants to create or set up a new monitor
+- pause: user wants to stop, pause, or cancel a specific active monitor
+- retrieve: user wants to resume a previously stopped/paused monitor
+- review: user wants to get status or details about a specific monitor
+- fund: user wants to fund or top up their monitor wallet
 
-If the request does not clearly match one of the above, return `out_of_scope`.
-Be strict. Ambiguous → out_of_scope. Off-topic (weather, general chat, other
-protocols, code help) → out_of_scope.
+Available monitor types (only for 'start'):
+- lending: monitors deposit APY across protocols for a chosen token
+
+Examples:
+- "show my monitors" → list
+- "get active monitors" → list
+- "start a monitor" → start
+- "set up deposit earn" → start
+- "stop monitor abc-123" → pause
+- "pause this monitor abc-123" → pause
+- "cancel monitor abc-123" → pause
+- "resume monitor abc-123" → retrieve
+- "get details on monitor abc-123" → review
+- "fund my wallet" → fund
+
+If the request does not clearly match any of the above, return `out_of_scope`.
+Be strict. Greetings, off-topic, capability questions → out_of_scope.
+
+Respond with a JSON object only, no other text:
+{"action": "<list|start|pause|retrieve|review|fund|out_of_scope>", "monitor_type": "<lending or null>", "reason": "<why>"}
 """
 
 
-async def classify_intent(state: CurrentMessageState) -> dict:
-    classification_llm = llm.with_structured_output(ClassificationToolOutput)
-    response: ClassificationToolOutput = await classification_llm.ainvoke(
-        [SystemMessage(content=CLASSIFICATION_SYSTEM_PROMPT)] + _recent(state["messages"])
+def _last_human(state: CurrentMessageState) -> list[HumanMessage]:
+    return [m for m in state["messages"] if isinstance(m, HumanMessage)][-1:]
+
+
+async def classify_action(state: CurrentMessageState) -> dict:
+    response: ActionOutput = await _invoke_structured(
+        [SystemMessage(content=ACTION_SYSTEM_PROMPT)] + _last_human(state),
+        ActionOutput,
     )
     return {
-        "intent": response.intent,
-        "messages": [AIMessage(content=response.reason, name="intent_classifier")],
+        "action": response.action,
+        "monitor_type": response.monitor_type,
+        "messages": [AIMessage(content=response.reason, name="action_classifier")],
     }
 
 
-def route_intent(state: CurrentMessageState):
-    return state["intent"]
+def route_action(state: CurrentMessageState) -> str:
+    return state["action"]
 
 
 async def fund_monitor(state: CurrentMessageState) -> dict:
@@ -78,7 +131,6 @@ async def fund_monitor(state: CurrentMessageState) -> dict:
 
 
 def observe_monitors(state: CurrentMessageState) -> dict:
-    # TODO: move monitor status here or move this to monitors subgraph
     display_active_monitors()
     return {
         "messages": [AIMessage(content=render_active_monitors())],
@@ -88,53 +140,11 @@ def observe_monitors(state: CurrentMessageState) -> dict:
 def out_of_scope(state: CurrentMessageState) -> dict:
     return {
         "messages": [AIMessage(content=(
-            "I'm Kairo, an agentic terminal for Defi Automation."
-            "I can set up and manage monitors, check their status, or show recent signals. "
-            "Type 'start monitor' to begin, or ask me about an active monitor."
+            "I'm Kairo, a DeFi monitoring terminal. "
+            "I can set up and manage monitors, check their status, or fund your monitor wallet. "
+            "Type 'start monitor' to begin."
         ))],
     }
-
-
-class MonitorToolOutput(BaseModel):
-    intent: SupportedMonitorIntents
-    monitor_type: AvailableMonitors | None = Field(
-        default=None,
-        description="Only relevant when intent is 'start'. Null if not specified by the user.",
-    )
-    reason: str = Field(description="Why this classification; what the user asked for")
-
-
-MONITOR_SYSTEM_PROMPT = """You classify user requests for <your tool>.
-
-Supported intents (and ONLY these):
-- start: user wants to setup a new or resume previously stopped monitoring for on-chain activity
-- pause: user wants to stop/pause an active running (started) monitor
-- retrieve: user wants to look for previously stopped monitors.
-- review: user wants to get status/metadata about the running monitor.
-
-Available monitor types (only for 'start' intent):
-- lending: monitors deposit APY across protocols for a chosen token
-
-If the request does not clearly match one of the above, return `out_of_scope`.
-Be strict. Ambiguous → out_of_scope. Off-topic (weather, general chat, other
-protocols, code help) → out_of_scope.
-"""
-
-
-async def classify_monitor_action(state: CurrentMessageState) -> dict:
-    monitor_type_classification_llm = llm.with_structured_output(MonitorToolOutput)
-    response: MonitorToolOutput = await monitor_type_classification_llm.ainvoke(
-        [SystemMessage(content=MONITOR_SYSTEM_PROMPT)] + _recent(state["messages"])
-    )
-    return {
-        "monitor_intent": response.intent,
-        "monitor_type": response.monitor_type,
-        "messages": [AIMessage(content=response.reason, name="monitor_classifier")],
-    }
-
-
-def route_monitor_action(state: CurrentMessageState):
-    return state["monitor_intent"]
 
 
 MonitorParamType = Literal["token", "address", "api_key", "string", "bool"]
@@ -199,14 +209,17 @@ async def extract_params(
         + (f" (choices: {', '.join(param.choices)})" if param.choices else "")
         for param in params
     )
+    json_shape = "{" + ", ".join(f'"{p.name}": null' for p in params) + "}"
     extraction_prompt = (
-        "Extract the requested params the user mentioned. Use null if not mentioned.\n\n"
-        f"Params:\n{param_descriptions}"
+        "Extract the requested params from the conversation. "
+        "Replace null with the actual value if the user mentioned it; keep null if not.\n\n"
+        f"Params:\n{param_descriptions}\n\n"
+        f"Respond with a JSON object only, no other text. Example shape: {json_shape}"
     )
 
-    extractor = llm.with_structured_output(ExtractedModel)
-    extracted = await extractor.ainvoke(
-        [{"role": "system", "content": extraction_prompt}] + messages
+    extracted = await _invoke_structured(
+        [{"role": "system", "content": extraction_prompt}] + messages,
+        ExtractedModel,
     )
     return {param.name: getattr(extracted, param.name, None) for param in params}
 
@@ -223,6 +236,7 @@ def launch_monitor(monitor_type: AvailableMonitors, monitor_params: dict[str, st
 
 async def monitor_start(state: CurrentMessageState):
     monitor_type: AvailableMonitors = state.get("monitor_type") or interrupt({
+        "type": "list",
         "prompt": "Which monitor type would you like to start?",
         "choices": list(MONITOR_CATALOGUE.keys()),
     })
@@ -244,11 +258,13 @@ async def monitor_start(state: CurrentMessageState):
         
         if param.choices:
             user_value = interrupt({
+                "type": "list",
                 "prompt": param.description,
                 "choices": param.choices,
             })
         else:
             user_value = interrupt({
+                "type": "text",
                 "prompt": param.description,
             })
 
@@ -267,7 +283,6 @@ async def monitor_start(state: CurrentMessageState):
 
     return {
         "messages": [AIMessage(content=f"Monitor started. ID: {result.monitor.id}")],
-        "monitor_intent": None,
     }
 
 
@@ -276,13 +291,12 @@ async def monitor_pause(state: CurrentMessageState):
         _recent(state["messages"]),
         [MonitorParam(name="monitor_id", description="The monitor UUID the user mentioned", type="string", required=False)],
     )
-    monitor_id = extracted.get("monitor_id") or interrupt({"prompt": "Which monitor ID should be paused?"})
+    monitor_id = extracted.get("monitor_id") or interrupt({"type": "text", "prompt": "Which monitor ID should be paused?"})
 
     engines.polling.stop(monitor_id)
     store.update_monitor_status(monitor_id, "paused")
     return {
         "messages": [AIMessage(content=f"Monitor '{monitor_id}' paused.")],
-        "monitor_intent": None,
     }
 
 async def monitor_review(state: CurrentMessageState):
@@ -290,7 +304,7 @@ async def monitor_review(state: CurrentMessageState):
         _recent(state["messages"]),
         [MonitorParam(name="monitor_id", description="The monitor UUID the user mentioned", type="string", required=False)],
     )
-    monitor_id = extracted.get("monitor_id") or interrupt({"prompt": "Which monitor ID would you like to review?"})
+    monitor_id = extracted.get("monitor_id") or interrupt({"type": "text", "prompt": "Which monitor ID would you like to review?"})
 
     monitor = store.get_monitor(monitor_id)
     if not monitor:
@@ -312,7 +326,6 @@ async def monitor_review(state: CurrentMessageState):
     )
     return {
         "messages": [AIMessage(content=summary)],
-        "monitor_intent": None,
     }
 
 async def monitor_retrieve(state: CurrentMessageState):
@@ -320,7 +333,7 @@ async def monitor_retrieve(state: CurrentMessageState):
         _recent(state["messages"]),
         [MonitorParam(name="monitor_id", description="The monitor UUID the user mentioned", type="string", required=False)],
     )
-    monitor_id = extracted.get("monitor_id") or interrupt({"prompt": "Which monitor ID would you like to resume?"})
+    monitor_id = extracted.get("monitor_id") or interrupt({"type": "text", "prompt": "Which monitor ID would you like to resume?"})
 
     monitor = store.get_monitor(monitor_id)
     if not monitor:
@@ -339,15 +352,13 @@ async def monitor_retrieve(state: CurrentMessageState):
     store.update_monitor_status(monitor_id, "active")
     return {
         "messages": [AIMessage(content=f"Monitor '{monitor_id}' resumed.")],
-        "monitor_intent": None,
     }
 
 
 
 workflow = StateGraph(CurrentMessageState)
 
-workflow.add_node(classify_intent)
-workflow.add_node(classify_monitor_action)
+workflow.add_node(classify_action)
 workflow.add_node(fund_monitor)
 workflow.add_node(observe_monitors)
 workflow.add_node(out_of_scope)
@@ -356,26 +367,18 @@ workflow.add_node(monitor_pause)
 workflow.add_node(monitor_review)
 workflow.add_node(monitor_retrieve)
 
-workflow.add_edge(START, "classify_intent")
+workflow.add_edge(START, "classify_action")
 workflow.add_conditional_edges(
-    "classify_intent",
-    route_intent,
+    "classify_action",
+    route_action,
     {
-        "monitor": "classify_monitor_action",
-        "observe": "observe_monitors",
-        "fund": "fund_monitor",
-        "out_of_scope": "out_of_scope",
-    },
-)
-workflow.add_conditional_edges(
-    "classify_monitor_action",
-    route_monitor_action,
-    {
+        "list": "observe_monitors",
         "start": "monitor_start",
         "pause": "monitor_pause",
         "review": "monitor_review",
         "retrieve": "monitor_retrieve",
-        "out_of_scope": END,
+        "fund": "fund_monitor",
+        "out_of_scope": "out_of_scope",
     },
 )
 workflow.add_edge("fund_monitor", END)
