@@ -1,5 +1,5 @@
 from agent.db._core import _open, _safe_json
-from agent.db.monitors import delete_monitor, load_active_monitors, upsert_monitor
+from agent.db.monitors import delete_monitor, load_active_monitors, update_monitor_status, upsert_monitor
 from agent.db.polls import async_store_poll, store_poll
 from agent.db.executions import (
     async_finish_execution,
@@ -27,6 +27,7 @@ __all__ = [
     "_safe_json",
     # monitors
     "upsert_monitor",
+    "update_monitor_status",
     "delete_monitor",
     "load_active_monitors",
     # polls

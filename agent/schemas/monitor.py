@@ -14,21 +14,6 @@ class MonitorStatus(str, Enum):
     expired = "expired"
 
 
-class DataSource(BaseModel):
-    endpoints: list[str] = Field(min_length=1)
-
-    @field_validator("endpoints")
-    @classmethod
-    def _no_empty_urls(cls, v: list[str]) -> list[str]:
-        if any(not ep.strip() for ep in v):
-            raise ValueError("endpoints must not contain empty strings")
-        return v
-
-    @classmethod
-    def from_url(cls, url: str) -> "DataSource":
-        return cls(endpoints=[url])
-
-
 # ---------------------------------------------------------------------------
 # Supported tokens
 # ---------------------------------------------------------------------------
@@ -119,7 +104,6 @@ class Monitor(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: str
     scope: BaseModel
-    source: DataSource
     poll_interval: int = Field(description="Polling interval in seconds")
     status: MonitorStatus = MonitorStatus.active
     created_at: datetime = Field(
@@ -140,11 +124,4 @@ class Monitor(BaseModel):
         if monitor_type and isinstance(scope_data, dict):
             schema = get_scope_schema(monitor_type)
             data["scope"] = schema(**scope_data)
-
-        source = data.get("source")
-        if isinstance(source, str):
-            data["source"] = DataSource(endpoints=[source])
-        elif isinstance(source, list):
-            data["source"] = DataSource(endpoints=source)
-
         return data

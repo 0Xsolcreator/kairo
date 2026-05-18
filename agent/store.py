@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 
 import agent.db as db
 from agent.analyzer.base import Decision
-from agent.schemas.monitor import Monitor
+from agent.schemas.monitor import Monitor, MonitorStatus
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +31,16 @@ def register_monitor(monitor: Monitor) -> None:
         type=monitor.type,
         status=monitor.status.value,
         scope_json=json.dumps(monitor.scope.model_dump()),
-        source_json=json.dumps(monitor.source.model_dump()),
         poll_interval=monitor.poll_interval,
         created_at=monitor.created_at.isoformat(),
     )
+
+
+def update_monitor_status(monitor_id: str, status: str) -> None:
+    monitor = _monitors.get(monitor_id)
+    if monitor:
+        monitor.status = MonitorStatus(status)
+    db.update_monitor_status(monitor_id, status)
 
 
 def unregister_monitor(monitor_id: str) -> None:

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import agent.engines as engines
 import agent.store as store
-from agent.schemas.monitor import DataSource, DepositEarnScope, Monitor
+from agent.schemas.monitor import DepositEarnScope, Monitor
 
 
 @dataclass(frozen=True)
@@ -31,10 +31,6 @@ def launch_deposit_earn_monitor(
     monitor = Monitor(
         type="deposit_earn",
         scope=scope,
-        source=DataSource(endpoints=[
-            "https://api.jup.ag/lend/v1",
-            "https://api.kamino.finance",
-        ]),
         poll_interval=60,
     )
     store.register_monitor(monitor)

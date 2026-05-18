@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS monitors (
     type          TEXT    NOT NULL,
     status        TEXT    NOT NULL DEFAULT 'active',
     scope_json    TEXT    NOT NULL,
-    source_json   TEXT    NOT NULL,
     poll_interval INTEGER NOT NULL,
     created_at    TEXT    NOT NULL
 );
@@ -99,7 +98,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE monitor_wallets ADD COLUMN deposited_kamino_vault TEXT"
         )
     except sqlite3.OperationalError:
-        pass  # column already exists
+        pass
+
+    try:
+        conn.execute("ALTER TABLE monitors DROP COLUMN source_json")
+    except sqlite3.OperationalError:
+        pass
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

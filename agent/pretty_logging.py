@@ -282,6 +282,49 @@ def print_monitors_box(monitors_data: list[dict]) -> None:
     print()
 
 
+def print_monitor_review_box(monitor) -> None:
+    """Styled box for monitor metadata review."""
+    W = 70
+    DASHES = 72
+
+    def row(content: str = "") -> str:
+        return f"  {ACCENT}│{R} {_vcell(content, W)} {ACCENT}│{R}"
+
+    def field(label: str, value: str) -> str:
+        return f"  {DIM}{label:<12}{R}  {value}"
+
+    status = monitor.status.value
+    status_color = GREEN if status == "active" else (YELLOW if status == "paused" else GRAY)
+    scope = monitor.scope
+
+    token_sym  = getattr(scope, "token_symbol", "—")
+    token_mint = getattr(scope, "token_mint",   "—")
+    jup_key    = getattr(scope, "jup_api_key",  None)
+    short_mint = f"{token_mint[:8]}…{token_mint[-4:]}" if len(token_mint) > 14 else token_mint
+    created    = monitor.created_at.strftime("%Y-%m-%d %H:%M UTC")
+
+    lines: list[str] = [
+        "",
+        f"  {BOLD}{monitor.type}{R}   {status_color}{BOLD}{status}{R}",
+        "",
+        field("ID",        monitor.id),
+        field("Token",     f"{ACCENT}{BOLD}{token_sym}{R}  {DIM}({short_mint}){R}"),
+        field("Interval",  f"every {monitor.poll_interval}s"),
+        field("Created",   created),
+        field("Jup key",   f"{GREEN}configured{R}" if jup_key else f"{DIM}not set{R}"),
+        "",
+    ]
+
+    short_id = f"{monitor.id[:8]}…{monitor.id[-4:]}"
+    header = f"─ Monitor review  ·  {short_id} "
+    print()
+    print(f"  {ACCENT}╭{header}{'─' * (DASHES - len(header))}╮{R}")
+    for line in lines:
+        print(row(line))
+    print(f"  {ACCENT}╰{'─' * DASHES}╯{R}")
+    print()
+
+
 def print_signals_box(monitor_id: str, signals: list[dict]) -> None:
     """Styled box for recent signals of a monitor."""
     W = 70
