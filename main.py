@@ -18,7 +18,7 @@ from langgraph.types import Command, Interrupt
 
 import agent.engines  # initialises polling + analyzer singletons
 import agent.store as store
-from agent.agent import workflow
+from agent.graph import workflow
 from agent.terminal import select_from_list
 
 
