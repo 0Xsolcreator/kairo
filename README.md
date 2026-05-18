@@ -8,7 +8,7 @@ Kairo is an agentic terminal for DeFi automation — local model, local executio
 
 ## Demo
 
-<!-- Add demo video here -->
+https://github.com/user-attachments/assets/04e4d269-c63e-4cb5-b0c1-8a3d837a63b7
 
 ---
 
